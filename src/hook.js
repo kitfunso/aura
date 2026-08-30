@@ -15,9 +15,12 @@ const { readState, writeState, pruneStale } = require("./state.js");
 const ESC = "\u001b";
 const BEL = "\u0007";
 const PROMPT_SNIPPET_LEN = 60;
-// Windows Terminal extended palette slot for the tab (frame) background,
-// per microsoft/terminal PR #13058. See ARCHITECTURE.md Known Risks.
-const TAB_COLOR_SLOT = 262;
+// 256-color palette slot aura redefines to carry the exact tab RGB, then
+// points the tab at it via DECAC. MEASURED 2026-08-30 on WT stable: slot 200
+// + DECAC works (tab turns the exact color); the extended slot 262 from
+// PR #13058 recolors the PANE BACKGROUND on this build - do not use it.
+// Cost: TUI apps see 256-color index 200 as the repo color; acceptable.
+const TAB_COLOR_SLOT = 200;
 
 function runGit(cwd, args) {
   try {
@@ -76,14 +79,24 @@ function buildEscapes(colors, title) {
   return out;
 }
 
-function paintFrame(frameHex, cachedHwnd) {
+function paintFrame(frameHex, cachedHwnd, vtPayload) {
   if (process.platform !== "win32") return null;
+  // A foreground handshake is only safe when this session lives in a terminal
+  // the user launched (WT_SESSION is inherited from the Windows Terminal tab).
+  // Headless runs (cron, Task Scheduler, claude -p from a service) have no
+  // WT_SESSION; grabbing the foreground window there would paint an unrelated
+  // window. A cached HWND is always safe to repaint.
+  if (!cachedHwnd && !process.env.WT_SESSION) return null;
   const adapter = path.join(__dirname, "adapters", "frame-win.ps1");
   const args = [
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", adapter,
     "-FrameColor", frameHex.slice(1),
   ];
   if (cachedHwnd) args.push("-Hwnd", String(cachedHwnd));
+  // Windows hooks get their own hidden console (measured), so the direct
+  // CONOUT$ write above lands nowhere visible; the adapter re-delivers the
+  // escapes into the tab's real console via ancestor AttachConsole.
+  if (vtPayload) args.push("-VtB64", Buffer.from(vtPayload, "utf8").toString("base64"));
   try {
     const out = execFileSync("powershell.exe", args, {
       timeout: 5000,
@@ -111,12 +124,28 @@ function main() {
   const titleParts = [identity.name];
   if (identity.branch) titleParts.push(identity.branch);
   if (event.prompt) titleParts.push(sanitizeForTitle(event.prompt).slice(0, PROMPT_SNIPPET_LEN));
-  writeToTerminal(buildEscapes(colors, titleParts.join(" · ")));
+  const escapes = buildEscapes(colors, titleParts.join(" · "));
+  // Direct tty write: the visible path where the hook shares the terminal's
+  // console (POSIX /dev/tty). On Windows it lands in the hook's own hidden
+  // console (harmless); the adapter spawn below is the visible delivery there.
+  const ttyTarget = writeToTerminal(escapes);
 
   const session = state.sessions[sessionId] || {};
-  if (!session.hwnd || session.frameHex !== colors.frameHex) {
-    const hwnd = paintFrame(colors.frameHex, session.hwnd || null);
-    if (hwnd) session.hwnd = hwnd;
+  session.tty = ttyTarget;
+  // Spawn the adapter when the frame needs painting OR the VT payload has not
+  // yet visibly reached this session's tab (vtHex). vtHex is only marked from
+  // prompt events: a SessionStart delivery races Claude Code's TUI init and
+  // may be wiped, so the first real prompt re-delivers once, then never again.
+  const needsFrame = !session.hwnd || session.frameHex !== colors.frameHex;
+  const needsVt = process.platform === "win32"
+    && event.hook_event_name === "UserPromptSubmit"
+    && session.vtHex !== colors.frameHex;
+  if (needsFrame || needsVt) {
+    const hwnd = paintFrame(colors.frameHex, session.hwnd || null, escapes);
+    if (hwnd) {
+      session.hwnd = hwnd;
+      if (needsVt) session.vtHex = colors.frameHex;
+    }
   }
   session.repoId = identity.repoId;
   session.branch = identity.branch;
