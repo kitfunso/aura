@@ -161,6 +161,14 @@ test("windowHasRepoSession: only a live repo sibling on the SAME window counts",
   assert.strictEqual(windowHasRepoSession({ r: { isRepo: true, hwnd: "853852" } }, 853852, "x"), true);
 });
 
+test("only repo sessions write the frame color; the loop paints the rest", () => {
+  const args = { eventName: "SessionStart", platform: "win32", session: {}, frameHex: HEX };
+  assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: true })).paintsFrame, true);
+  // A bare shell must not repaint a window a repo tab may be sharing, and it
+  // does not need to: rainbow-win.ps1 paints every tick once the loop starts.
+  assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: false })).paintsFrame, false);
+});
+
 test("reclaim: a repo session repaints while its window is still rainbow-owned", () => {
   const session = { hwnd: 853852, frameHex: HEX, vtHex: HEX };
   const held = decideEvent({

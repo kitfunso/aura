@@ -82,7 +82,7 @@ function buildEscapes(colors, title) {
   return out;
 }
 
-function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
+function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, paintsFrame) {
   if (process.platform !== "win32") return null;
   // A foreground handshake is only safe when this session lives in a terminal
   // the user launched. Every supported terminal marks its child environment
@@ -97,6 +97,10 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
     "-FrameColor", frameHex.slice(1),
   ];
   if (cachedHwnd) args.push("-Hwnd", String(cachedHwnd));
+  // The adapter still resolves and returns the HWND, it just does not write the
+  // color: a non-repo session needs its window handle (to key the rainbow loop
+  // and frame ownership) without touching a frame a repo sibling may own.
+  if (!paintsFrame) args.push("-NoPaint");
   // Windows hooks get their own hidden console (measured), so the direct
   // CONOUT$ write above lands nowhere visible; the adapter re-delivers the
   // escapes into the tab's real console via ancestor AttachConsole. With
@@ -196,10 +200,12 @@ function main() {
   let painted = false;
   if (plan.spawnAdapter) {
     const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId } : null;
-    const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, escapes, vtDelay);
+    const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, escapes, vtDelay, plan.paintsFrame);
     if (hwnd) {
       session.hwnd = hwnd;
-      painted = true;
+      // Ownership follows the actual color write, not the handle lookup: a
+      // -NoPaint call resolves the window without claiming it.
+      painted = plan.paintsFrame;
       if (plan.markVtHex) session.vtHex = colors.frameHex;
     }
   }

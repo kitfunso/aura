@@ -13,6 +13,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$FrameColor,  # RRGGBB, no leading #
     [long]$Hwnd = 0,
+    [switch]$NoPaint,          # resolve and report the HWND, but write no color
     [string]$VtB64 = "",
     [int]$VtDelayMs = 0,       # >0: hand targets to a delayed hidden writer instead of writing now
     [string]$VtTargets = "",   # delayed-writer mode: comma-joined attach-target PIDs, topmost first
@@ -92,13 +93,18 @@ if ($Hwnd -ne 0) {
 }
 
 if ($target -ne [IntPtr]::Zero) {
-    # COLORREF is 0x00BBGGRR.
-    $r = [Convert]::ToInt32($FrameColor.Substring(0, 2), 16)
-    $g = [Convert]::ToInt32($FrameColor.Substring(2, 2), 16)
-    $b = [Convert]::ToInt32($FrameColor.Substring(4, 2), 16)
-    $colorref = ($b -shl 16) -bor ($g -shl 8) -bor $r
-    [void][AuraFrame]::DwmSetWindowAttribute($target, 34, [ref]$colorref, 4)  # DWMWA_BORDER_COLOR
-    [void][AuraFrame]::DwmSetWindowAttribute($target, 35, [ref]$colorref, 4)  # DWMWA_CAPTION_COLOR
+    # Tabs share one window frame, so the color belongs to whichever session
+    # owns the WINDOW. -NoPaint callers (non-repo sessions, whose windows the
+    # hue-cycle loop paints) only need the handle back.
+    if (-not $NoPaint) {
+        # COLORREF is 0x00BBGGRR.
+        $r = [Convert]::ToInt32($FrameColor.Substring(0, 2), 16)
+        $g = [Convert]::ToInt32($FrameColor.Substring(2, 2), 16)
+        $b = [Convert]::ToInt32($FrameColor.Substring(4, 2), 16)
+        $colorref = ($b -shl 16) -bor ($g -shl 8) -bor $r
+        [void][AuraFrame]::DwmSetWindowAttribute($target, 34, [ref]$colorref, 4)  # DWMWA_BORDER_COLOR
+        [void][AuraFrame]::DwmSetWindowAttribute($target, 35, [ref]$colorref, 4)  # DWMWA_CAPTION_COLOR
+    }
     Write-Output ("" + [int64]$target)
 } else {
     Write-Output "0"

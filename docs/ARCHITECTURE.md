@@ -70,14 +70,30 @@ No database. One JSON state file: `%LOCALAPPDATA%/aura/state.json`.
       "hwnd": 123456,            // cached after foreground handshake; frame repaints use this
       "repoId": "github.com/kitfunso/hippo",
       "branch": "main",
+      "isRepo": true,            // repoId is a path either way, so it cannot carry this
+      "frameHex": "#266ed9",     // last painted color; a mismatch is what triggers a repaint
+      "vtHex": "#266ed9",        // last color whose escapes visibly landed; skips re-delivery
+      "tty": "\\\\.\\CONOUT$",
       "lastPrompt": "fix the decay test",
       "updatedAt": "2026-08-30T12:00:00Z"
     }
-  }
+  },
+  "remotes": { "C:/Users/x/hippo": "git@github.com:kitfunso/hippo.git" },
+  "frameOwner": { "123456": "<session_id> | rainbow" },
+  "rainbowPid": { "123456": 4242 }
 }
 ```
 
-Constraints: file is small, rewritten atomically (write temp + rename). Stale sessions are pruned when `updatedAt` is older than 48 h.
+Constraints: file is small, rewritten atomically (write temp + rename). Stale sessions are pruned when `updatedAt` is older than 48 h. aura is the only writer; aura-overlay reads this file and never writes it.
+
+### Window ownership (why the last two keys are keyed by HWND)
+
+Tabs share one window frame, so the frame color is a property of the WINDOW, not of whichever tab wrote last. Two rules settle every conflict:
+
+1. **A repo session outranks a bare shell.** A non-repo session (a shell in the home directory) claims the window for the hue-cycle loop only when no live repo session shares it, and it never writes the frame color itself: `decideEvent` returns `paintsFrame: false` and the hook passes `-NoPaint`, so the adapter resolves the HWND without touching the color. `rainbow-win.ps1` is the painter for those windows, and it stands down the moment `frameOwner[hwnd]` names a session.
+2. **A repo session takes its frame back.** If its window is still rainbow-owned, the session repaints once (`reclaimFrame`) even when every cached value matches, and that paint writes `frameOwner[hwnd] = sessionId`, which the loop sees before its next write.
+
+Measured 2026-08-30, the case that forced this: 7 sessions all on hwnd 853852, one of them started outside a repo, one `frameOwner` entry reading `rainbow`. Every repo tab lost its color, and because Lane B skips rainbow-owned windows, the terminal got no ring at all.
 
 ## The Color Contract (Lane B inherits this - do not break casually)
 
@@ -105,7 +121,8 @@ No network API. The "API" is two OS/CLI surfaces:
 ## Service Boundaries
 - `color.js` owns all color math. Nothing else computes colors.
 - `hook.js` owns Claude Code integration (stdin parsing, event routing, state, escapes). It never contains Win32 knowledge.
-- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `frame-win.ps1` (Win32/DWM) is the only v0 adapter.
+- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color (see Window ownership). `frame-win.ps1` (Win32/DWM) and `rainbow-win.ps1` (hue loop) are the v0 adapters.
+- `decide.js` owns every what-to-do rule: identity precedence, when to spawn, who paints, who owns a window. It is pure, so the rules are testable without a desktop.
 - `install.js` owns settings.json editing. It must back up settings.json before writing (matches the user's pre-write-guard convention).
 
 ## Data Flow (primary case: new session starts)

@@ -79,6 +79,15 @@ function decideEvent({ eventName, platform, session, frameHex, isRepo, windowRai
     vtDelayMs: isPrompt ? 0 : 2000,
     markVtHex: isPrompt && needsVt,
     wantsRainbow: platform === "win32" && !isRepo,
+    // Who writes the DWM frame color: repo sessions only. A non-repo window is
+    // painted by the hue-cycle loop, which repaints every tick and stands down
+    // as soon as a repo session owns the window, so a direct paint here is
+    // redundant when the session is alone in its window and destructive when it
+    // shares one - a bare shell would overwrite its repo sibling's color, and
+    // the sibling's steady state never repaints to put it back. Deciding this
+    // from isRepo alone keeps it independent of the HWND, which matters because
+    // the paint call IS how the HWND gets resolved in the first place.
+    paintsFrame: isRepo,
   };
 }
 
