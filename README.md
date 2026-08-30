@@ -29,6 +29,14 @@ the base shade. Outside a git repo the working folder is the identity.
 
 ## Install
 
+Once `@kitfunso/aura` is on npm:
+
+```
+npx @kitfunso/aura
+```
+
+From a checkout today:
+
 ```
 node bin/install.js
 ```
@@ -43,6 +51,9 @@ Uninstall:
 ```
 node bin/install.js --uninstall
 ```
+
+Target a different settings file (testing, non-standard setup) with
+`--settings <path>`; the backup lands next to that file.
 
 Requirements: Windows 11 build 22000+ for the frame color, Windows Terminal
 1.15+ for the tab color, Node.js. Tint + title degrade gracefully elsewhere.

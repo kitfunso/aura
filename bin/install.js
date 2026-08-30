@@ -3,12 +3,18 @@
 // aura installer: merges the SessionStart + UserPromptSubmit hook entries into
 // ~/.claude/settings.json. Rule 4: back up first, merge, NEVER overwrite other
 // settings. Idempotent: re-running adds nothing. --uninstall removes only
-// aura's entries.
+// aura's entries. --settings <path> targets a different file (testing the
+// merge against a copy, non-standard setups).
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const SETTINGS_FILE = path.join(os.homedir(), ".claude", "settings.json");
+function argValue(flag) {
+  const index = process.argv.indexOf(flag);
+  return index !== -1 && process.argv[index + 1] ? process.argv[index + 1] : null;
+}
+
+const SETTINGS_FILE = argValue("--settings") || path.join(os.homedir(), ".claude", "settings.json");
 const BACKUP_FILE = SETTINGS_FILE + ".aura-bak";
 const HOOK_EVENTS = ["SessionStart", "UserPromptSubmit"];
 
