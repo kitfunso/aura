@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
+const { identityFrom, decideEvent } = require("./decide.js");
 const { writeToTerminal } = require("./tty.js");
 const { readState, writeState, pruneStale, stateFile, isProcessAlive } = require("./state.js");
 
@@ -33,23 +34,21 @@ function runGit(cwd, args) {
   }
 }
 
-// Identity: origin remote URL > repo root path > cwd (outside any repo).
-// One git spawn on the hot path (root + branch together); the remote URL is
-// stable per root, so it is cached in state and looked up at most once.
+// I/O side of identity: one git spawn on the hot path (root + branch
+// together); the remote URL is stable per root, so it is cached in state and
+// looked up at most once. Precedence itself lives in decide.js.
 function resolveIdentity(cwd, state) {
   const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
-  if (!combined) {
-    const normalized = path.resolve(cwd);
-    return { repoId: normalized, branch: null, name: path.basename(normalized), isRepo: false };
+  let remoteUrl = null;
+  if (combined) {
+    const root = combined.split(/\r?\n/)[0];
+    const remotes = state.remotes || (state.remotes = {});
+    if (!(root in remotes)) {
+      remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
+    }
+    remoteUrl = remotes[root];
   }
-  const lines = combined.split(/\r?\n/);
-  const root = lines[0];
-  const branch = lines[1] || null;
-  const remotes = state.remotes || (state.remotes = {});
-  if (!(root in remotes)) {
-    remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
-  }
-  return { repoId: remotes[root] || root, branch, name: path.basename(root), isRepo: true };
+  return identityFrom({ gitCombined: combined, remoteUrl, cwd });
 }
 
 // Prompt text lands inside an escape sequence: strip control bytes so it can
@@ -170,30 +169,27 @@ function main() {
 
   const session = state.sessions[sessionId] || {};
   session.tty = ttyTarget;
-  const isPrompt = event.hook_event_name === "UserPromptSubmit";
-  // Session start (open, resume, clear) may land this session in a brand-new
-  // tab or window: drop the cached handle and delivery mark so it
-  // re-handshakes and re-delivers where it lives NOW.
-  if (!isPrompt) {
+  // The what-to-do call is pure (decide.js documents the why of each rule);
+  // everything below just executes the plan.
+  const plan = decideEvent({
+    eventName: event.hook_event_name,
+    platform: process.platform,
+    session,
+    frameHex: colors.frameHex,
+    isRepo: identity.isRepo,
+  });
+  if (plan.clearHandshake) {
     delete session.hwnd;
     delete session.vtHex;
   }
-  // Spawn the adapter when the frame needs painting OR the VT payload has not
-  // yet visibly reached this session's tab (vtHex). An immediate SessionStart
-  // write races Claude Code's TUI init and gets wiped (measured), so there the
-  // adapter hands its targets to a delayed writer instead; vtHex is only ever
-  // marked from prompt events, so the first prompt re-delivers once as the
-  // backstop, then never again.
-  const needsFrame = !session.hwnd || session.frameHex !== colors.frameHex;
-  const needsVt = process.platform === "win32" && session.vtHex !== colors.frameHex;
   let painted = false;
-  if (needsFrame || needsVt) {
-    const vtDelay = isPrompt ? null : { ms: 2000, sessionId };
-    const hwnd = paintFrame(colors.frameHex, session.hwnd || null, escapes, vtDelay);
+  if (plan.spawnAdapter) {
+    const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId } : null;
+    const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, escapes, vtDelay);
     if (hwnd) {
       session.hwnd = hwnd;
       painted = true;
-      if (isPrompt && needsVt) session.vtHex = colors.frameHex;
+      if (plan.markVtHex) session.vtHex = colors.frameHex;
     }
   }
   // Frame ownership + rainbow lifecycle, both keyed by HWND (tabs share the
@@ -201,9 +197,9 @@ function main() {
   // must be able to stop it). Non-repo sessions mark the window "rainbow" and
   // keep a loop alive on it; repo sessions record ownership on every paint,
   // which the loop sees before its next write and exits.
-  if (process.platform === "win32" && session.hwnd) {
+  if (session.hwnd) {
     const hwndKey = String(session.hwnd);
-    if (!identity.isRepo) {
+    if (plan.wantsRainbow) {
       const owners = state.frameOwner || (state.frameOwner = {});
       owners[hwndKey] = "rainbow";
       const loops = state.rainbowPid || (state.rainbowPid = {});
@@ -211,7 +207,7 @@ function main() {
         const pid = startRainbow(session.hwnd);
         if (pid) loops[hwndKey] = pid;
       }
-    } else if (painted) {
+    } else if (process.platform === "win32" && painted) {
       const owners = state.frameOwner || (state.frameOwner = {});
       owners[hwndKey] = sessionId;
     }
