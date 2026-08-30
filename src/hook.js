@@ -10,7 +10,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
 const { writeToTerminal } = require("./tty.js");
-const { readState, writeState, pruneStale } = require("./state.js");
+const { readState, writeState, pruneStale, stateFile } = require("./state.js");
 
 const ESC = "\u001b";
 const BEL = "\u0007";
@@ -79,7 +79,7 @@ function buildEscapes(colors, title) {
   return out;
 }
 
-function paintFrame(frameHex, cachedHwnd, vtPayload) {
+function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
   if (process.platform !== "win32") return null;
   // A foreground handshake is only safe when this session lives in a terminal
   // the user launched (WT_SESSION is inherited from the Windows Terminal tab).
@@ -95,12 +95,23 @@ function paintFrame(frameHex, cachedHwnd, vtPayload) {
   if (cachedHwnd) args.push("-Hwnd", String(cachedHwnd));
   // Windows hooks get their own hidden console (measured), so the direct
   // CONOUT$ write above lands nowhere visible; the adapter re-delivers the
-  // escapes into the tab's real console via ancestor AttachConsole.
-  if (vtPayload) args.push("-VtB64", Buffer.from(vtPayload, "utf8").toString("base64"));
+  // escapes into the tab's real console via ancestor AttachConsole. With
+  // vtDelay, the adapter instead hands its live-resolved attach targets to a
+  // detached hidden writer that fires after Claude Code's TUI init - the
+  // ancestry walk must run NOW, while this process still anchors the chain.
+  if (vtPayload) {
+    args.push("-VtB64", Buffer.from(vtPayload, "utf8").toString("base64"));
+    if (vtDelay) {
+      args.push("-VtDelayMs", String(vtDelay.ms));
+      args.push("-StateFile", stateFile());
+      args.push("-SessionId", vtDelay.sessionId);
+    }
+  }
   try {
     const out = execFileSync("powershell.exe", args, {
       timeout: 5000,
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
     }).toString().trim();
     const hwnd = parseInt(out, 10);
     return Number.isFinite(hwnd) && hwnd > 0 ? hwnd : null;
@@ -132,19 +143,28 @@ function main() {
 
   const session = state.sessions[sessionId] || {};
   session.tty = ttyTarget;
+  const isPrompt = event.hook_event_name === "UserPromptSubmit";
+  // Session start (open, resume, clear) may land this session in a brand-new
+  // tab or window: drop the cached handle and delivery mark so it
+  // re-handshakes and re-delivers where it lives NOW.
+  if (!isPrompt) {
+    delete session.hwnd;
+    delete session.vtHex;
+  }
   // Spawn the adapter when the frame needs painting OR the VT payload has not
-  // yet visibly reached this session's tab (vtHex). vtHex is only marked from
-  // prompt events: a SessionStart delivery races Claude Code's TUI init and
-  // may be wiped, so the first real prompt re-delivers once, then never again.
+  // yet visibly reached this session's tab (vtHex). An immediate SessionStart
+  // write races Claude Code's TUI init and gets wiped (measured), so there the
+  // adapter hands its targets to a delayed writer instead; vtHex is only ever
+  // marked from prompt events, so the first prompt re-delivers once as the
+  // backstop, then never again.
   const needsFrame = !session.hwnd || session.frameHex !== colors.frameHex;
-  const needsVt = process.platform === "win32"
-    && event.hook_event_name === "UserPromptSubmit"
-    && session.vtHex !== colors.frameHex;
+  const needsVt = process.platform === "win32" && session.vtHex !== colors.frameHex;
   if (needsFrame || needsVt) {
-    const hwnd = paintFrame(colors.frameHex, session.hwnd || null, escapes);
+    const vtDelay = isPrompt ? null : { ms: 2000, sessionId };
+    const hwnd = paintFrame(colors.frameHex, session.hwnd || null, escapes, vtDelay);
     if (hwnd) {
       session.hwnd = hwnd;
-      if (needsVt) session.vtHex = colors.frameHex;
+      if (isPrompt && needsVt) session.vtHex = colors.frameHex;
     }
   }
   session.repoId = identity.repoId;

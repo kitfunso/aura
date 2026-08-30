@@ -13,7 +13,11 @@
 param(
     [Parameter(Mandatory=$true)][string]$FrameColor,  # RRGGBB, no leading #
     [long]$Hwnd = 0,
-    [string]$VtB64 = ""
+    [string]$VtB64 = "",
+    [int]$VtDelayMs = 0,       # >0: hand targets to a delayed hidden writer instead of writing now
+    [string]$VtTargets = "",   # delayed-writer mode: comma-joined attach-target PIDs, topmost first
+    [string]$StateFile = "",   # delayed-writer mode: state.json path for the vtHex skip check
+    [string]$SessionId = ""    # delayed-writer mode: which session's vtHex to check
 )
 $ErrorActionPreference = "Stop"
 
@@ -48,6 +52,30 @@ public static class AuraFrame {
     }
 }
 "@
+
+if ($VtTargets -ne "") {
+    # Delayed-writer mode (grandchild). The parent resolved the attach targets
+    # while the hook's ancestor chain was still alive; a detached process
+    # cannot resolve them itself (the walk only sees live processes and the
+    # hook's node parent is dead before PowerShell even starts). Wait out
+    # Claude Code's TUI init, then deliver - unless a prompt got there first
+    # (vtHex marked in state), in which case its payload is newer than ours.
+    if ($VtDelayMs -gt 0) { Start-Sleep -Milliseconds $VtDelayMs }
+    if ($StateFile -ne "" -and $SessionId -ne "" -and (Test-Path -LiteralPath $StateFile)) {
+        try {
+            $state = Get-Content -Raw -LiteralPath $StateFile | ConvertFrom-Json
+            $sess = $state.sessions.$SessionId
+            if ($sess -and $sess.vtHex -eq ("#" + $FrameColor.ToLower())) { exit 0 }
+        } catch {}
+    }
+    try {
+        $bytes = [Convert]::FromBase64String($VtB64)
+        foreach ($target in ($VtTargets -split ",")) {
+            if ([AuraFrame]::WriteVt([uint32]$target, $bytes)) { break }
+        }
+    } catch {}
+    exit 0
+}
 
 $allowedProcs = @("WindowsTerminal", "OpenConsole", "conhost", "wezterm-gui", "alacritty", "ghostty")
 
@@ -96,8 +124,22 @@ if ($VtB64 -ne "") {
         # Topmost first: the highest attachable ancestor owns the tab console;
         # nearer ancestors (the hook's own node/cmd) hold the hidden one.
         [array]::Reverse($chain)
-        foreach ($ancestor in $chain) {
-            if ([AuraFrame]::WriteVt($ancestor, $bytes)) { break }
+        if ($VtDelayMs -gt 0) {
+            # Session start: an immediate write races the TUI init and gets
+            # wiped (measured 2026-08-30). Hand the live-resolved targets to a
+            # hidden detached grandchild that writes after the delay.
+            if ($chain.Length -gt 0) {
+                $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath,
+                    "-FrameColor", $FrameColor, "-VtB64", $VtB64,
+                    "-VtTargets", ($chain -join ","), "-VtDelayMs", $VtDelayMs)
+                if ($StateFile -ne "") { $argList += @("-StateFile", $StateFile) }
+                if ($SessionId -ne "") { $argList += @("-SessionId", $SessionId) }
+                Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList $argList
+            }
+        } else {
+            foreach ($ancestor in $chain) {
+                if ([AuraFrame]::WriteVt($ancestor, $bytes)) { break }
+            }
         }
     } catch {}
 }
