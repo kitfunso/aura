@@ -1,10 +1,17 @@
 {
   "name": "@kitfunso/aura",
   "version": "0.1.0",
-  "private": true,
   "description": "Color identity for Claude Code terminal windows: repo = hue, branch = shade, latest prompt in the title.",
   "license": "MIT",
   "author": "kitfunso",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kitfunso/aura.git"
+  },
+  "homepage": "https://github.com/kitfunso/aura#readme",
+  "bugs": {
+    "url": "https://github.com/kitfunso/aura/issues"
+  },
   "bin": {
     "aura-install": "bin/install.js"
   },

@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        margin: 0; width: 1920px; height: 1080px; overflow: hidden;
+        background: #0e0e12;
+      }
+      body { font-family: "Segoe UI", "Inter", sans-serif; }
+      code, pre, .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+      @font-face { font-family: "Cascadia Mono"; src: local("Cascadia Mono"); }
+
+      .clip { position: absolute; inset: 0; }
+
+      .vignette {
+        position: absolute; inset: 0;
+        background: radial-gradient(ellipse at 50% 42%, #17171d 0%, #0e0e12 70%);
+      }
+
+      /* ---- terminal window ---- */
+      .win { position: absolute; width: 560px; height: 312px; }
+      .win-layer {
+        position: absolute; inset: 0; border-radius: 10px; overflow: hidden;
+        border: 2px solid #2a2a31; background: #0d0d10;
+        box-shadow: 0 18px 44px rgba(0,0,0,.55);
+      }
+      .tabstrip {
+        height: 40px; background: #1b1b21; display: flex; align-items: center;
+        padding: 0 14px; gap: 10px;
+      }
+      .tabdot { width: 10px; height: 10px; border-radius: 50%; background: #4a4a52; }
+      .tabname { font-size: 17px; color: #9a9aa4; letter-spacing: .2px; }
+      .tbody { padding: 16px 20px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 15px; line-height: 1.85; }
+      .l-prompt { color: #d4d4dc; }
+      .l-dim { color: #94949d; }
+
+      /* ---- headlines / captions ---- */
+      .headline {
+        position: absolute; left: 0; right: 0; text-align: center;
+        color: #f2f2f6; font-size: 74px; font-weight: 600; letter-spacing: -1px;
+        text-shadow: 0 4px 30px rgba(0,0,0,.8);
+      }
+      .caption {
+        position: absolute; left: 0; right: 0; bottom: 64px; text-align: center;
+        color: #e8e8ee; font-size: 44px; font-weight: 500;
+        text-shadow: 0 4px 24px rgba(0,0,0,.8);
+      }
+      .caption .hue { font-weight: 700; }
+
+      /* ---- command pill ---- */
+      #cmdbar {
+        position: absolute; inset: auto; left: 50%; top: 470px;
+        background: #17171d; border: 2px solid #3a3a44; border-radius: 14px;
+        padding: 22px 34px; box-shadow: 0 24px 70px rgba(0,0,0,.7);
+        display: flex; align-items: center; gap: 16px;
+      }
+      #cmdbar .chev { color: #9ad926; font-size: 30px; font-family: "Cascadia Mono", Consolas, monospace; }
+      #cmdtext-wrap { overflow: hidden; white-space: nowrap; width: 0; }
+      #cmdtext { font-family: "Cascadia Mono", Consolas, monospace; font-size: 30px; color: #f2f2f6; white-space: pre; }
+      #caret { width: 14px; height: 34px; background: #d4d4dc; }
+
+      /* ---- branch scene ---- */
+      #branchwin { position: absolute; left: 480px; top: 230px; width: 960px; height: 520px; }
+      #branchwin .win-layer .tabstrip { height: 54px; padding: 0 20px; }
+      #branchwin .tabname { font-size: 24px; }
+      #branchwin .tbody { font-size: 20px; padding: 24px 30px; }
+      .branchchip {
+        position: absolute; top: 100px; right: 30px; border-radius: 999px;
+        padding: 10px 22px; font-family: "Cascadia Mono", Consolas, monospace; font-size: 20px;
+      }
+
+      /* ---- overlay scene ---- */
+      .appwin { position: absolute; border-radius: 10px; background: #15151a; box-shadow: 0 18px 44px rgba(0,0,0,.55); overflow: hidden; }
+      .apphead { height: 46px; background: #202027; display: flex; align-items: center; padding: 0 18px; color: #9a9aa4; font-size: 18px; gap: 12px; }
+      .appbody { padding: 22px; }
+      .fakeline { height: 14px; border-radius: 7px; background: #24242c; margin-bottom: 14px; }
+      .ring { position: absolute; border-radius: 14px; border: 4px solid #fff; pointer-events: none; }
+      .kbd {
+        position: absolute; left: 50%; top: 120px;
+        font-family: "Cascadia Mono", Consolas, monospace; font-size: 34px; color: #f2f2f6;
+        background: #17171d; border: 2px solid #3a3a44; border-bottom-width: 6px;
+        border-radius: 12px; padding: 14px 28px;
+      }
+
+      /* ---- end card ---- */
+      #wordmark { position: absolute; left: 0; right: 0; top: 340px; text-align: center; color: #f2f2f6; font-size: 150px; font-weight: 650; letter-spacing: -3px; }
+      #dots { position: absolute; left: 0; right: 0; top: 560px; text-align: center; }
+      #dots span { display: inline-block; width: 26px; height: 26px; border-radius: 50%; margin: 0 9px; }
+      #npxpill {
+        position: absolute; left: 50%; top: 650px;
+        font-family: "Cascadia Mono", Consolas, monospace; font-size: 34px; color: #f2f2f6;
+        background: #17171d; border: 2px solid #3a3a44; border-radius: 12px; padding: 16px 32px;
+      }
+      #ghline { position: absolute; left: 0; right: 0; top: 760px; text-align: center; color: #8a8a94; font-size: 26px; }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="30"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div class="vignette"></div>
+
+      <!-- Scene 1+2: the grid of terminals -->
+      <div id="grid" class="clip" data-start="0" data-duration="17" data-track-index="1"></div>
+
+      <div id="h1a" class="clip headline" data-start="0.8" data-duration="4.2" data-track-index="2" style="top: 80px;">Every window looks the same.</div>
+      <div id="h1b" class="clip headline" data-start="2.0" data-duration="3.0" data-track-index="2" style="top: 930px;">Which session is which?</div>
+
+      <div id="cmdbar" class="clip" data-start="5.0" data-duration="6.8" data-track-index="3">
+        <span class="chev">&#10095;</span>
+        <span id="cmdtext-wrap"><span id="cmdtext">npx @kitfunso/aura</span></span>
+        <span id="caret"></span>
+      </div>
+
+      <div id="h2" class="clip caption" data-start="11.2" data-duration="5.3" data-track-index="2">
+        repo = <span class="hue">hue</span>. Same repo, same color, every restart.
+      </div>
+
+      <!-- Scene 3: branch = shade -->
+      <div id="branchscene" class="clip" data-start="17" data-duration="4.5" data-track-index="1">
+        <div id="branchwin"></div>
+        <div class="caption">branch = <span class="hue">shade</span>.</div>
+      </div>
+
+      <!-- Scene 4: aura-overlay rings -->
+      <div id="overlayscene" class="clip" data-start="21.5" data-duration="4.5" data-track-index="1">
+        <div id="appwin1" class="appwin" style="left: 240px; top: 300px; width: 640px; height: 460px;">
+          <div class="apphead">API docs &#183; browser</div>
+          <div class="appbody">
+            <div class="fakeline" style="width: 78%"></div>
+            <div class="fakeline" style="width: 92%"></div>
+            <div class="fakeline" style="width: 64%"></div>
+            <div class="fakeline" style="width: 86%"></div>
+            <div class="fakeline" style="width: 40%"></div>
+          </div>
+        </div>
+        <div id="appwin2" class="appwin" style="left: 1040px; top: 300px; width: 640px; height: 460px;">
+          <div class="apphead">#eng &#183; chat</div>
+          <div class="appbody">
+            <div class="fakeline" style="width: 55%"></div>
+            <div class="fakeline" style="width: 82%"></div>
+            <div class="fakeline" style="width: 70%"></div>
+            <div class="fakeline" style="width: 88%"></div>
+            <div class="fakeline" style="width: 46%"></div>
+          </div>
+        </div>
+        <div id="ring1" class="ring" style="left: 228px; top: 288px; width: 664px; height: 484px; border-color: #26d95f;"></div>
+        <div id="ring2" class="ring" style="left: 1028px; top: 288px; width: 664px; height: 484px; border-color: #d9c726;"></div>
+        <div id="kbd" class="kbd">Ctrl + Alt + G</div>
+        <div id="ovcap" class="caption">aura-overlay: a colored ring around anything.</div>
+      </div>
+
+      <!-- Scene 5: end card -->
+      <div id="endcard" class="clip" data-start="26" data-duration="4" data-track-index="1">
+        <div id="wordmark">aura</div>
+        <div id="dots"></div>
+        <div id="npxpill">npx @kitfunso/aura</div>
+        <div id="ghline">github.com/kitfunso/aura &#183; Windows Terminal today, macOS next</div>
+      </div>
+    </div>
+
+    <script>
+      // Colors below are the REAL output of src/color.js (the color contract),
+      // computed with colorsFor({repoId, branch}) for these repo names.
+      var REPOS = [
+        { name: "quantamental", frame: "#d97d26", tint: "#2d2116" },
+        { name: "hippo",        frame: "#d9c726", tint: "#2d2a16" },
+        { name: "ramsky",       frame: "#26d95f", tint: "#162d1d" },
+        { name: "btlab",        frame: "#26d9be", tint: "#162d29" },
+        { name: "bitfall",      frame: "#d9266e", tint: "#2d161f" },
+        { name: "fifty",        frame: "#d9264a", tint: "#2d161a" }
+      ];
+      var DOT_HEXES = ["#d97d26", "#d9c726", "#9ad926", "#26d95f", "#26d9be", "#263bd9", "#d9266e", "#d9264a"];
+
+      var LAYERED = ' data-layout-allow-overlap data-layout-allow-occlusion';
+      var BODY_LINES =
+        '<div class="l-prompt"' + LAYERED + '>&#10095; claude</div>' +
+        '<div class="l-dim"' + LAYERED + '>&#10022; Thinking&#8230;</div>' +
+        '<div class="l-dim"' + LAYERED + '>&#9679; Read src/model.py</div>' +
+        '<div class="l-dim"' + LAYERED + '>&#9679; Running tests&#8230;</div>';
+
+      function winHtml(layerClass, dotColor, tabText, frame, tint) {
+        var style = "";
+        var strip = "";
+        var dot = "background:#4a4a52";
+        var name = "";
+        if (frame) {
+          style = ' style="border-color:' + frame + ';background:' + tint + ';"';
+          strip = ' style="background:rgba(0,0,0,.35);"';
+          dot = "background:" + frame;
+          name = ' style="color:#e8e8ee;"';
+        }
+        return '<div class="win-layer ' + layerClass + '" data-layout-allow-overlap data-layout-allow-occlusion' + style + '>' +
+          '<div class="tabstrip"' + strip + '><span class="tabdot" style="' + dot + '"></span>' +
+          '<span class="tabname"' + LAYERED + name + '>' + tabText + "</span></div>" +
+          '<div class="tbody">' + BODY_LINES + "</div></div>";
+      }
+
+      // Build the 3x2 grid: gray layer + colored layer stacked per window.
+      (function () {
+        var grid = document.getElementById("grid");
+        var html = "";
+        for (var i = 0; i < 6; i++) {
+          var col = i % 3;
+          var row = Math.floor(i / 3);
+          var x = 105 + col * 600;
+          var y = 210 + row * 360;
+          html += '<div class="win" id="win' + i + '" style="left:' + x + "px;top:" + y + 'px;">' +
+            winHtml("gray", null, "Claude Code", null, null) +
+            winHtml("color color" + i, null, REPOS[i].name, REPOS[i].frame, REPOS[i].tint) +
+            "</div>";
+        }
+        grid.innerHTML = html;
+
+        // Branch scene: ramsky at master (frame #26d95f) then feat/live-sync (shade 3, #86eaa5).
+        document.getElementById("branchwin").innerHTML =
+          winHtml("br-master", null, "ramsky", "#26d95f", "#162d1d") +
+          winHtml("br-feat", null, "ramsky", "#86eaa5", "#1f412a") +
+          '<div class="branchchip chip-master" data-layout-allow-overlap data-layout-allow-occlusion style="border:2px solid #26d95f;color:#26d95f;">master</div>' +
+          '<div class="branchchip chip-feat" data-layout-allow-overlap data-layout-allow-occlusion style="border:2px solid #86eaa5;color:#86eaa5;">feat/live-sync</div>';
+
+        var dots = "";
+        for (var d = 0; d < DOT_HEXES.length; d++) {
+          dots += '<span style="background:' + DOT_HEXES[d] + '"></span>';
+        }
+        document.getElementById("dots").innerHTML = dots;
+      })();
+
+      window.__timelines = window.__timelines || {};
+      var tl = gsap.timeline({ paused: true });
+
+      // Centering lives in GSAP (not CSS transform) so tweens on y/scale
+      // do not discard it when GSAP rewrites the element transform.
+      tl.set("#cmdbar", { xPercent: -50 }, 0);
+      tl.set("#kbd", { xPercent: -50 }, 0);
+      tl.set("#npxpill", { xPercent: -50 }, 0);
+
+      // Scene 1: windows pop in, identical and gray.
+      for (var i = 0; i < 6; i++) {
+        tl.from("#win" + i, { opacity: 0, y: 26, duration: 0.5 }, 0.25 + i * 0.12);
+      }
+      tl.from("#h1a", { opacity: 0, y: 18, duration: 0.6 }, 0.9);
+      tl.from("#h1b", { opacity: 0, y: 18, duration: 0.6 }, 2.1);
+      tl.to("#h1a", { opacity: 0, duration: 0.4 }, 4.5);
+      tl.to("#h1b", { opacity: 0, duration: 0.4 }, 4.5);
+
+      // Scene 2: the command types on, then the colors sweep the grid.
+      tl.from("#cmdbar", { opacity: 0, y: 20, duration: 0.4 }, 5.1);
+      tl.to("#cmdtext-wrap", { width: 340, duration: 1.7, ease: "steps(18)" }, 5.7);
+      tl.fromTo("#caret", { opacity: 1 }, { opacity: 0, duration: 0.4, repeat: 11, yoyo: true }, 5.1);
+      tl.to("#cmdbar", { scale: 1.04, duration: 0.12, yoyo: true, repeat: 1 }, 7.6);
+      tl.to("#cmdbar", { opacity: 0, y: -16, duration: 0.4 }, 11.2);
+      for (var c = 0; c < 6; c++) {
+        tl.from(".color" + c, { opacity: 0, duration: 0.55 }, 7.9 + c * 0.45);
+        tl.fromTo("#win" + c, { scale: 1 }, { scale: 1.025, duration: 0.18, yoyo: true, repeat: 1 }, 7.9 + c * 0.45);
+      }
+      tl.from("#h2", { opacity: 0, y: 18, duration: 0.6 }, 11.3);
+      tl.to("#grid", { opacity: 0, duration: 0.5 }, 16.4);
+      tl.to("#h2", { opacity: 0, duration: 0.5 }, 16.0);
+
+      // Scene 3: branch = shade. Crossfade master -> feature shade.
+      tl.from("#branchwin", { opacity: 0, y: 24, duration: 0.5 }, 17.2);
+      tl.from("#branchscene .caption", { opacity: 0, y: 18, duration: 0.5 }, 17.7);
+      tl.set(".br-feat", { opacity: 0 }, 17.0);
+      tl.set(".chip-feat", { opacity: 0 }, 17.0);
+      tl.to(".br-feat", { opacity: 1, duration: 0.5 }, 19.2);
+      tl.to(".chip-master", { opacity: 0, duration: 0.3 }, 19.2);
+      tl.to(".chip-feat", { opacity: 1, duration: 0.3 }, 19.35);
+      tl.to("#branchscene", { opacity: 0, duration: 0.4 }, 21.0);
+
+      // Scene 4: aura-overlay rings snap around non-terminal windows.
+      tl.from("#appwin1", { opacity: 0, y: 24, duration: 0.45 }, 21.7);
+      tl.from("#appwin2", { opacity: 0, y: 24, duration: 0.45 }, 21.9);
+      tl.from("#kbd", { opacity: 0, y: -16, duration: 0.4 }, 22.4);
+      tl.fromTo("#ring1", { opacity: 0, scale: 1.05 }, { opacity: 1, scale: 1, duration: 0.35 }, 22.9);
+      tl.fromTo("#ring2", { opacity: 0, scale: 1.05 }, { opacity: 1, scale: 1, duration: 0.35 }, 23.4);
+      tl.from("#ovcap", { opacity: 0, y: 18, duration: 0.5 }, 23.9);
+      tl.to("#overlayscene", { opacity: 0, duration: 0.4 }, 25.5);
+
+      // Scene 5: end card.
+      tl.from("#wordmark", { opacity: 0, scale: 0.92, duration: 0.6 }, 26.2);
+      tl.from("#dots span", { opacity: 0, y: 14, duration: 0.35, stagger: 0.06 }, 26.7);
+      tl.from("#npxpill", { opacity: 0, y: 16, duration: 0.5 }, 27.3);
+      tl.from("#ghline", { opacity: 0, duration: 0.5 }, 27.8);
+
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>

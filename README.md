@@ -1,9 +1,20 @@
 # aura
 
+[![npm](https://img.shields.io/npm/v/%40kitfunso%2Faura)](https://www.npmjs.com/package/@kitfunso/aura)
+[![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)
+![runtime dependencies: 0](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
+
 Color identity for Claude Code terminal sessions. Repo = hue, branch = shade.
 With 10+ agent windows open, you find the right one by color, not by reading.
 
-![Live QA: pink tab + tinted pane + pink border for the bitfall session, blue tab for the aura session](docs/img/live-qa.png)
+![Demo: gray terminal windows get per-repo colors, branches get shades, and aura-overlay rings any window](https://raw.githubusercontent.com/kitfunso/aura/master/assets/demo.gif)
+
+```
+npx @kitfunso/aura
+```
+
+![Live QA: pink tab + tinted pane + pink border for the bitfall session, blue tab for the aura session](https://raw.githubusercontent.com/kitfunso/aura/master/docs/img/live-qa.png)
 
 One Windows Terminal window, three Claude Code sessions: the active bitfall
 session got a pink tab, a pink-tinted pane, and a pink window border; the aura
@@ -29,13 +40,11 @@ the base shade. Outside a git repo the working folder is the identity.
 
 ## Install
 
-Once `@kitfunso/aura` is on npm:
-
 ```
 npx @kitfunso/aura
 ```
 
-From a checkout today:
+From a checkout:
 
 ```
 node bin/install.js
@@ -92,7 +101,8 @@ no API to recolor another app's frame). See the support matrix in
 
 ## Lane B (built)
 
-The cross-app overlay lives at [aura-overlay](../aura-overlay): click-through
+The cross-app overlay lives at
+[aura-overlay](https://github.com/kitfunso/aura-overlay): click-through
 colored rings around any window, same repo = hue contract, hotkey tagging for
 non-terminal windows. `src/color.js` is byte-identical in both repos; changes
 flow from here to there, never back. This repo only guarantees the contract
