@@ -34,6 +34,23 @@ function hasTerminalMarker(env) {
   return TERMINAL_MARKERS.some(function (name) { return Boolean(env[name]); });
 }
 
+// Tabs share one window, so frame ownership is a property of the WINDOW, not
+// of whichever tab wrote last. Without this, a single session started outside
+// any repo (a shell in the home directory) claimed the whole window as
+// "rainbow" and suppressed the repo color of every sibling tab - and because
+// Lane B skips rainbow-owned windows, the only ringed windows on screen were
+// the palette's (measured 2026-08-30: 7 sessions, all on hwnd 853852, one
+// rainbow claim, zero rings on the terminal).
+function windowHasRepoSession(sessions, hwnd, exceptSessionId) {
+  if (!hwnd) return false;
+  const key = String(hwnd);
+  return Object.keys(sessions || {}).some(function (id) {
+    const session = sessions[id];
+    return id !== exceptSessionId && session && session.isRepo === true &&
+      String(session.hwnd) === key;
+  });
+}
+
 // What the hook should do for one event.
 // - SessionStart (open, resume, clear) may land the session in a brand-new
 //   tab or window: the cached handle and delivery mark are dropped so the
@@ -43,12 +60,16 @@ function hasTerminalMarker(env) {
 //   session-start delivery goes through the delayed writer and the first
 //   prompt re-delivers once as the backstop, then never again.
 // - Non-repo windows route to the rainbow loop; repo paints own the frame.
-function decideEvent({ eventName, platform, session, frameHex, isRepo }) {
+function decideEvent({ eventName, platform, session, frameHex, isRepo, windowRainbowOwned }) {
   const isPrompt = eventName === "UserPromptSubmit";
   const clearHandshake = !isPrompt;
   const cachedHwnd = clearHandshake ? null : session.hwnd || null;
   const cachedVtHex = clearHandshake ? undefined : session.vtHex;
-  const needsFrame = !cachedHwnd || session.frameHex !== frameHex;
+  // A repo session whose window is still rainbow-owned must repaint once to
+  // take the frame back: the hue-cycle loop holds it until a repo paint lands,
+  // and the DWM color on the window is being rewritten every cycle.
+  const reclaimFrame = isRepo && Boolean(windowRainbowOwned);
+  const needsFrame = !cachedHwnd || session.frameHex !== frameHex || reclaimFrame;
   const needsVt = platform === "win32" && cachedVtHex !== frameHex;
   return {
     isPrompt,
@@ -61,4 +82,4 @@ function decideEvent({ eventName, platform, session, frameHex, isRepo }) {
   };
 }
 
-module.exports = { identityFrom, decideEvent, hasTerminalMarker };
+module.exports = { identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession };

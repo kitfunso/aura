@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
-const { identityFrom, decideEvent, hasTerminalMarker } = require("./decide.js");
+const { identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession } = require("./decide.js");
 const { writeToTerminal } = require("./tty.js");
 const { readState, writeState, pruneStale, stateFile, isProcessAlive } = require("./state.js");
 
@@ -180,12 +180,14 @@ function main() {
   session.tty = ttyTarget;
   // The what-to-do call is pure (decide.js documents the why of each rule);
   // everything below just executes the plan.
+  const owners = state.frameOwner || (state.frameOwner = {});
   const plan = decideEvent({
     eventName: event.hook_event_name,
     platform: process.platform,
     session,
     frameHex: colors.frameHex,
     isRepo: identity.isRepo,
+    windowRainbowOwned: Boolean(session.hwnd && owners[String(session.hwnd)] === "rainbow"),
   });
   if (plan.clearHandshake) {
     delete session.hwnd;
@@ -208,8 +210,10 @@ function main() {
   // which the loop sees before its next write and exits.
   if (session.hwnd) {
     const hwndKey = String(session.hwnd);
-    if (plan.wantsRainbow) {
-      const owners = state.frameOwner || (state.frameOwner = {});
+    // A non-repo session only claims the window when it is alone in it: a
+    // repo tab sharing the window keeps its own color for the whole frame.
+    const sharedWithRepo = windowHasRepoSession(state.sessions, session.hwnd, sessionId);
+    if (plan.wantsRainbow && !sharedWithRepo) {
       owners[hwndKey] = "rainbow";
       const loops = state.rainbowPid || (state.rainbowPid = {});
       if (!isProcessAlive(loops[hwndKey])) {
@@ -217,12 +221,14 @@ function main() {
         if (pid) loops[hwndKey] = pid;
       }
     } else if (process.platform === "win32" && painted) {
-      const owners = state.frameOwner || (state.frameOwner = {});
       owners[hwndKey] = sessionId;
     }
   }
   session.repoId = identity.repoId;
   session.branch = identity.branch;
+  // Persisted so sibling tabs can tell a repo session from a bare shell:
+  // repoId is a path either way, so it cannot carry that distinction.
+  session.isRepo = identity.isRepo;
   session.frameHex = colors.frameHex;
   if (event.prompt) session.lastPrompt = sanitizeForTitle(event.prompt).slice(0, 200);
   session.updatedAt = new Date().toISOString();

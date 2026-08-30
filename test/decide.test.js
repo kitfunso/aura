@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const { identityFrom, decideEvent, hasTerminalMarker } = require("../src/decide.js");
+const { identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession } = require("../src/decide.js");
 
 // -- identityFrom: origin remote URL > repo root path > cwd --
 
@@ -140,4 +140,43 @@ test("rainbow: non-repo on win32 wants the loop, repo and POSIX do not", () => {
     session: {}, frameHex: HEX, isRepo: false,
   });
   assert.strictEqual(posix.wantsRainbow, false);
+});
+
+// -- Window-scoped ownership: tabs share one frame --
+
+test("windowHasRepoSession: only a live repo sibling on the SAME window counts", () => {
+  const sessions = {
+    repo: { isRepo: true, hwnd: 853852 },
+    shell: { isRepo: false, hwnd: 853852 },
+    other: { isRepo: true, hwnd: 999 },
+    noHwnd: { isRepo: true },
+  };
+  assert.strictEqual(windowHasRepoSession(sessions, 853852, "shell"), true);
+  assert.strictEqual(windowHasRepoSession(sessions, 853852, "repo"), false);   // itself does not count
+  assert.strictEqual(windowHasRepoSession(sessions, 999, "shell"), true);
+  assert.strictEqual(windowHasRepoSession(sessions, 12345, "shell"), false);   // window with no sibling
+  assert.strictEqual(windowHasRepoSession(sessions, null, "shell"), false);
+  assert.strictEqual(windowHasRepoSession({}, 853852, "shell"), false);
+  // hwnd may be a number here and a string there: compare as strings
+  assert.strictEqual(windowHasRepoSession({ r: { isRepo: true, hwnd: "853852" } }, 853852, "x"), true);
+});
+
+test("reclaim: a repo session repaints while its window is still rainbow-owned", () => {
+  const session = { hwnd: 853852, frameHex: HEX, vtHex: HEX };
+  const held = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session, frameHex: HEX, isRepo: true, windowRainbowOwned: true,
+  });
+  assert.strictEqual(held.spawnAdapter, true);   // takes the frame back from the loop
+  const settled = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session, frameHex: HEX, isRepo: true, windowRainbowOwned: false,
+  });
+  assert.strictEqual(settled.spawnAdapter, false);   // steady prompt path stays spawn-free
+  // a non-repo session never reclaims: the loop is its own frame
+  const shell = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session, frameHex: HEX, isRepo: false, windowRainbowOwned: true,
+  });
+  assert.strictEqual(shell.spawnAdapter, false);
 });
