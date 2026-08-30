@@ -19,6 +19,21 @@ function identityFrom({ gitCombined, remoteUrl, cwd }) {
   return { repoId: remoteUrl || root, branch, name: path.basename(root), isRepo: true };
 }
 
+// Proof the session lives in a terminal the user launched: each supported
+// terminal injects its own marker variable into child processes, and headless
+// runs (cron, Task Scheduler, service-spawned `claude -p`) carry none.
+// WT_SESSION is measured on this box; the other three come from each
+// terminal's docs (wezterm sets WEZTERM_PANE in spawned programs, alacritty
+// lists ALACRITTY_WINDOW_ID as a default variable, ghostty injects
+// GHOSTTY_RESOURCES_DIR) and are best-effort - the frame adapter's
+// process-name allowlist still filters the foreground window either way.
+// Plain conhost sets no marker: it never gets a first paint.
+const TERMINAL_MARKERS = ["WT_SESSION", "WEZTERM_PANE", "ALACRITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"];
+
+function hasTerminalMarker(env) {
+  return TERMINAL_MARKERS.some(function (name) { return Boolean(env[name]); });
+}
+
 // What the hook should do for one event.
 // - SessionStart (open, resume, clear) may land the session in a brand-new
 //   tab or window: the cached handle and delivery mark are dropped so the
@@ -46,4 +61,4 @@ function decideEvent({ eventName, platform, session, frameHex, isRepo }) {
   };
 }
 
-module.exports = { identityFrom, decideEvent };
+module.exports = { identityFrom, decideEvent, hasTerminalMarker };

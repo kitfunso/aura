@@ -9,7 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
-const { identityFrom, decideEvent } = require("./decide.js");
+const { identityFrom, decideEvent, hasTerminalMarker } = require("./decide.js");
 const { writeToTerminal } = require("./tty.js");
 const { readState, writeState, pruneStale, stateFile, isProcessAlive } = require("./state.js");
 
@@ -85,11 +85,12 @@ function buildEscapes(colors, title) {
 function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
   if (process.platform !== "win32") return null;
   // A foreground handshake is only safe when this session lives in a terminal
-  // the user launched (WT_SESSION is inherited from the Windows Terminal tab).
-  // Headless runs (cron, Task Scheduler, claude -p from a service) have no
-  // WT_SESSION; grabbing the foreground window there would paint an unrelated
-  // window. A cached HWND is always safe to repaint.
-  if (!cachedHwnd && !process.env.WT_SESSION) return null;
+  // the user launched. Every supported terminal marks its child environment
+  // (decide.js TERMINAL_MARKERS); headless runs (cron, Task Scheduler,
+  // claude -p from a service) carry no marker, and grabbing the foreground
+  // window there would paint an unrelated window. A cached HWND is always
+  // safe to repaint.
+  if (!cachedHwnd && !hasTerminalMarker(process.env)) return null;
   const adapter = path.join(__dirname, "adapters", "frame-win.ps1");
   const args = [
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", adapter,

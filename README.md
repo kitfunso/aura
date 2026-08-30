@@ -69,6 +69,10 @@ Requirements: Windows 11 build 22000+ for the frame color, Windows Terminal
 1.15+ for the tab color, Node.js. Tint + title degrade gracefully elsewhere.
 No runtime dependencies, no network calls, everything local.
 
+The frame paint fires in terminals that mark their environment: Windows
+Terminal (verified), wezterm, alacritty, and ghostty (per their docs,
+best-effort). Plain conhost sets no marker and gets no paint.
+
 ## How it works (and the traps we measured)
 
 The design is shaped by four findings, all measured live on 2026-08-30
@@ -94,7 +98,7 @@ Win32 code), `bin/install.js` (installer). Tests (run from the repo root;
 Windows node does not resolve a bare directory for `--test`):
 
 ```
-node --test test/color.test.js test/decide.test.js
+node --test test/color.test.js test/decide.test.js test/install.test.js
 ```
 
 ## Cross-platform

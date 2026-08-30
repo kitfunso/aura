@@ -2,7 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const { identityFrom, decideEvent } = require("../src/decide.js");
+const { identityFrom, decideEvent, hasTerminalMarker } = require("../src/decide.js");
 
 // -- identityFrom: origin remote URL > repo root path > cwd --
 
@@ -108,6 +108,18 @@ test("VT delivery is win32-only; POSIX never owes VT", () => {
   });
   assert.strictEqual(plan.spawnAdapter, false);
   assert.strictEqual(plan.markVtHex, false);
+});
+
+// -- Terminal markers: the first-paint gate (broadened from WT_SESSION-only
+// 2026-08-30 so wezterm/alacritty/ghostty sessions get their first paint) --
+
+test("terminal markers: every supported terminal opens the gate, headless does not", () => {
+  assert.strictEqual(hasTerminalMarker({}), false);                   // cron / Task Scheduler
+  assert.strictEqual(hasTerminalMarker({ PATH: "C:/x" }), false);     // unrelated env only
+  assert.strictEqual(hasTerminalMarker({ WT_SESSION: "" }), false);   // empty = unset
+  for (const name of ["WT_SESSION", "WEZTERM_PANE", "ALACRITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR"]) {
+    assert.strictEqual(hasTerminalMarker({ [name]: "x" }), true, name);
+  }
 });
 
 // -- Rainbow-vs-frame routing (step 2) --
