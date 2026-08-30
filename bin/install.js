@@ -44,7 +44,10 @@ function main() {
     process.exit(1);
   }
 
-  fs.writeFileSync(BACKUP_FILE, raw);
+  // The backup exists to preserve the PRE-aura settings. Later runs (upgrade,
+  // uninstall) must not clobber the only copy of that state with an
+  // aura-present version, so only the first run writes it.
+  if (!fs.existsSync(BACKUP_FILE)) fs.writeFileSync(BACKUP_FILE, raw);
 
   if (!settings.hooks || typeof settings.hooks !== "object") settings.hooks = {};
   let changed = false;
@@ -62,7 +65,12 @@ function main() {
   }
 
   if (changed) {
-    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2) + "\n");
+    // settings.json carries the user's whole hook/permission config (rule 4):
+    // a crash mid-write must never leave it truncated. Temp + rename is atomic
+    // on the same volume.
+    const tmp = SETTINGS_FILE + ".aura-tmp";
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
+    fs.renameSync(tmp, SETTINGS_FILE);
   }
   const action = uninstall ? "removed from" : "installed into";
   console.log("aura: " + (changed ? action : "no change needed in") + " " + SETTINGS_FILE);

@@ -37,13 +37,17 @@ function runGit(cwd, args) {
 // I/O side of identity: one git spawn on the hot path (root + branch
 // together); the remote URL is stable per root, so it is cached in state and
 // looked up at most once. Precedence itself lives in decide.js.
-function resolveIdentity(cwd, state) {
+function resolveIdentity(cwd, state, recheckNullRemote) {
   const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
   let remoteUrl = null;
   if (combined) {
     const root = combined.split(/\r?\n/)[0];
     const remotes = state.remotes || (state.remotes = {});
-    if (!(root in remotes)) {
+    // A cached null would otherwise stick forever: a repo that GAINS an origin
+    // remote after first sighting would keep its path-based color and disagree
+    // with every other clone. Recheck nulls on SessionStart only, so the
+    // per-prompt path stays at one git spawn (rule 5).
+    if (!(root in remotes) || (recheckNullRemote && remotes[root] === null)) {
       remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
     }
     remoteUrl = remotes[root];
@@ -130,9 +134,13 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
 // paid only when a non-repo session has no live loop.
 function startRainbow(hwnd) {
   const adapter = path.join(__dirname, "adapters", "rainbow-win.ps1");
+  // Both paths land inside single-quoted PowerShell arguments; a quote in the
+  // install path (a username like O'Brien) would end the argument early and
+  // kill the launch. Doubling is PowerShell's escape for ' inside '...'.
+  const psq = function (s) { return String(s).replace(/'/g, "''"); };
   const launch = "(Start-Process -PassThru -WindowStyle Hidden powershell.exe -ArgumentList " +
-    "'-NoProfile','-ExecutionPolicy','Bypass','-File','" + adapter + "'," +
-    "'-Hwnd','" + String(hwnd) + "','-StateFile','" + stateFile() + "').Id";
+    "'-NoProfile','-ExecutionPolicy','Bypass','-File','" + psq(adapter) + "'," +
+    "'-Hwnd','" + String(hwnd) + "','-StateFile','" + psq(stateFile()) + "').Id";
   try {
     const out = execFileSync("powershell.exe", ["-NoProfile", "-Command", launch], {
       timeout: 5000,
@@ -155,7 +163,7 @@ function main() {
   const cwd = event.cwd || process.cwd();
   const sessionId = event.session_id || "unknown";
   const state = readState();
-  const identity = resolveIdentity(cwd, state);
+  const identity = resolveIdentity(cwd, state, event.hook_event_name === "SessionStart");
   const colors = colorsFor({ repoId: identity.repoId, branch: identity.branch });
 
   const titleParts = [identity.name];

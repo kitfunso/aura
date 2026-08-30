@@ -51,8 +51,9 @@ node bin/install.js
 ```
 
 This merges two hook entries (SessionStart, UserPromptSubmit) into
-`~/.claude/settings.json`. The previous file is backed up to
-`settings.json.aura-bak` first. Re-running adds nothing (idempotent).
+`~/.claude/settings.json`. On the first install the file is backed up to
+`settings.json.aura-bak`; that backup keeps your pre-aura settings and is
+never overwritten by later runs. Re-running adds nothing (idempotent).
 Colors appear in sessions started after the install.
 
 Uninstall:
@@ -89,7 +90,12 @@ The design is shaped by four findings, all measured live on 2026-08-30
 
 Repo layout: `src/color.js` (the pure color contract), `src/hook.js` (hook
 entry), `src/tty.js` (terminal device), `src/adapters/frame-win.ps1` (all
-Win32 code), `bin/install.js` (installer). Tests: `node --test test/`.
+Win32 code), `bin/install.js` (installer). Tests (run from the repo root;
+Windows node does not resolve a bare directory for `--test`):
+
+```
+node --test test/color.test.js test/decide.test.js
+```
 
 ## Cross-platform
 
