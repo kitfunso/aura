@@ -90,8 +90,10 @@ frame adapters for them are planned (macOS needs an overlay window, there is
 no API to recolor another app's frame). See the support matrix in
 `docs/ARCHITECTURE.md`.
 
-## Lane B (later)
+## Lane B (built)
 
-The color contract in `src/color.js` is written to be lifted unchanged into a
-cross-app overlay that colors Slack/browser/other-agent windows the same way.
-That is a separate tool; this repo only guarantees the contract stays pure.
+The cross-app overlay lives at [aura-overlay](../aura-overlay): click-through
+colored rings around any window, same repo = hue contract, hotkey tagging for
+non-terminal windows. `src/color.js` is byte-identical in both repos; changes
+flow from here to there, never back. This repo only guarantees the contract
+stays pure. Spike evidence that green-lit it: `docs/LANE-B.md`.
