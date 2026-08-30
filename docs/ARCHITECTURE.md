@@ -10,15 +10,16 @@ Claude Code session (per window)
 +---------------------------+
 | src/hook.js  (Node)       |---- reads repo root + branch (git)
 |  - color.js: identity ->  |---- writes escapes to the console (CONOUT$)
-|    {hue, tint, frame}     |        OSC 11 = background tint
-|  - title: repo·branch·    |        OSC 0  = window title
+|    {hue, tint, frame}     |        OSC 11 = background tint (per tab)
+|  - title: repo·branch·    |        OSC 4 + DECAC = tab header color (per tab, WT 1.15+)
+|    latest prompt          |        OSC 0  = window/tab title
 |    latest prompt          |
 |  - state.json per session |
 +------------+--------------+
-             | spawns once per session (nonce-title handshake)
+             | spawns on first paint / color change (foreground handshake)
              v
 +---------------------------+
-| adapters/frame-win.ps1    |---- FindWindow by nonce title -> HWND
+| adapters/frame-win.ps1    |---- GetForegroundWindow -> HWND (terminal allowlist)
 |  P/Invoke DwmSetWindow-   |---- DWMWA_BORDER_COLOR (34)
 |  Attribute on the HWND    |---- DWMWA_CAPTION_COLOR (35)
 +---------------------------+
@@ -50,7 +51,7 @@ aura/
     tty.js               # opens the live terminal device: CONOUT$ (win32), /dev/tty (POSIX)
     state.js             # read/write local state (per-OS app-data dir)
     adapters/
-      frame-win.ps1      # Windows 11: HWND by nonce title + DWM border/caption paint
+      frame-win.ps1      # Windows 11: foreground HWND (allowlisted) + DWM border/caption paint
                          # (frame-macos, frame-linux-x11 later; same interface)
   bin/
     install.js           # npx installer: registers hooks in ~/.claude/settings.json
@@ -66,7 +67,7 @@ No database. One JSON state file: `%LOCALAPPDATA%/aura/state.json`.
 {
   "sessions": {
     "<claude session_id>": {
-      "hwnd": 123456,            // cached after nonce handshake; frame repaints use this
+      "hwnd": 123456,            // cached after foreground handshake; frame repaints use this
       "repoId": "github.com/kitfunso/hippo",
       "branch": "main",
       "lastPrompt": "fix the decay test",
@@ -104,25 +105,25 @@ No network API. The "API" is two OS/CLI surfaces:
 ## Service Boundaries
 - `color.js` owns all color math. Nothing else computes colors.
 - `hook.js` owns Claude Code integration (stdin parsing, event routing, state, escapes). It never contains Win32 knowledge.
-- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({nonceTitle | cachedHandle, frameHex}) -> handle, or null when unsupported. `frame-win.ps1` (Win32/DWM) is the only v0 adapter.
+- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `frame-win.ps1` (Win32/DWM) is the only v0 adapter.
 - `install.js` owns settings.json editing. It must back up settings.json before writing (matches the user's pre-write-guard convention).
 
 ## Data Flow (primary case: new session starts)
 1. Claude Code fires SessionStart; `hook.js` gets JSON on stdin.
 2. `hook.js` resolves repo root + branch (`git -C <cwd> rev-parse`), computes colors via `color.js`.
-3. It writes OSC 11 (tint) and a one-shot nonce title (`aura:<random>`) to CONOUT$.
-4. It spawns `frame.ps1`, which finds the HWND by the nonce title, paints border + caption, returns the HWND.
-5. `hook.js` caches the HWND in state.json, then sets the real title `repo · branch`.
-6. On each UserPromptSubmit: recompute branch (it may have changed), re-emit tint, set title `repo · branch · <prompt snippet>`, repaint frame via cached HWND (cheap, idempotent).
+3. It writes one escape string to the tty device: OSC 11 (tint), the tab color (Windows Terminal: `OSC 4;262;rgb:RR/GG/BB` + DECAC `ESC[2;15;262,|`, gated on `WT_SESSION`; iTerm2: `OSC 6;1;bg` triple, gated on `TERM_PROGRAM`), and the title `repo · branch`.
+4. If no HWND is cached (or the frame color changed), it spawns the frame adapter. The adapter takes `GetForegroundWindow()` - the window the user just typed in - verifies the window belongs to an allowlisted terminal process (so an alt-tab race can never paint another app), paints border + caption, and prints the HWND.
+5. `hook.js` caches the HWND in state.json. A rejected foreground (user was elsewhere) is retried on the next prompt.
+6. On each UserPromptSubmit: recompute branch (it may have changed), re-emit tint, set title `repo · branch · <prompt snippet>`. The DWM frame color persists on the window, so NO repaint and NO PowerShell spawn happens unless the color changed - the per-prompt path stays under the 50 ms budget.
 
 ## Cross-Platform Support Matrix
 
 The core (color.js, hook.js, tty.js, state.js) is OS-neutral. Exactly two things vary per OS: the tty device path (handled inside tty.js) and the frame adapter.
 
-| Surface | Tint (OSC 11) | Title (OSC 0) | Extra | Real frame |
+| Surface | Tint (OSC 11) | Title (OSC 0) | Tab color | Real frame |
 |---|---|---|---|---|
-| Windows 11 + Windows Terminal | yes | yes | - | v0: DWM adapter |
-| macOS iTerm2 | yes | yes | tab color via iTerm2 `OSC 6;1;bg` escapes | later: overlay adapter (macOS has no API to recolor another app's frame; overlay needs Accessibility permission - Lane B technique) |
+| Windows 11 + Windows Terminal | yes | yes | DECAC + OSC 4, WT 1.15+ (PR microsoft/terminal#13058) | v0: DWM adapter |
+| macOS iTerm2 | yes | yes | iTerm2 `OSC 6;1;bg` escapes | later: overlay adapter (macOS has no API to recolor another app's frame; overlay needs Accessibility permission - Lane B technique) |
 | macOS stock Terminal | unverified | yes | - | same overlay adapter |
 | Linux X11 (VTE terminals) | yes | yes | - | later: overlay or WM rule |
 | Linux Wayland | yes | yes | - | hard (compositor-gated); tint + title carry identity |
@@ -130,7 +131,8 @@ The core (color.js, hook.js, tty.js, state.js) is OS-neutral. Exactly two things
 Rules: a missing frame adapter degrades to tint + title, never errors. iTerm2 tab color is emitted only when `TERM_PROGRAM=iTerm.app`. iTerm2 escape reference: https://iterm2.com/documentation-escape-codes.html
 
 ## Known Risks (tracked, with fallbacks)
-- **Claude Code may overwrite the terminal title between hooks.** Mitigation: re-assert on every prompt; the frame color sticks to the HWND regardless. If title churn is bad, title text becomes best-effort and the frame/tint carry identity. Measured in Spike step 1.
-- **Windows Terminal is often single-process for many windows**, so PID-ancestry cannot identify the right window. That is exactly why HWND discovery uses the nonce-title handshake, not process walking.
+- **CONFIRMED 2026-08-30 (spikes): Claude Code overwrites the terminal title continuously** - a nonce title set by a child process never survives long enough to find the window by it (polled 1000 ms, never seen). Title text is therefore best-effort, re-asserted per prompt; frame + tint carry identity. This also killed the nonce-title handshake: HWND discovery is `GetForegroundWindow()` at prompt time, gated by a terminal-process allowlist (WindowsTerminal, OpenConsole, conhost, wezterm-gui, alacritty, ghostty).
+- **CONFIRMED 2026-08-30: Windows Terminal runs all windows in one process** (four windows, one PID measured), so PID matching cannot identify a window. Foreground handshake avoids it entirely.
+- **CONFIRMED 2026-08-30: CONOUT$ escape delivery works from Claude Code's process tree** - the user saw the tint land. `GetConsoleWindow()=0` under ConPTY is normal and does NOT mean the console is invisible. If a future hook context turns out detached, the measured fallback is `AttachConsole()` to an ancestor process (spike/attach-spike.ps1 proved the write path: attached to bash.exe ancestor, 13 bytes written).
 - **The tty write (CONOUT$ / /dev/tty) may fail if the hook process is not attached to the terminal.** Spike step 1 proves or kills this on Windows; fallback is emitting via the statusline path instead (degraded: no tint until statusline refresh).
-- **Tabs share one frame.** Accepted per PRD; tint + title still work per tab.
+- **Tabs share one frame** (DWM is per-window). The frame shows the color of the last-typed session. Per-tab identity = tab color + tint + title. Tab color caveats: a tab launched with `--tabColor` cannot be overridden by the escape; the extended palette slot 262 (FRAME_BACKGROUND) addressing via OSC 4 is documented in PR #13058 but not yet verified on this box - the basic 16-color DECAC form (`ESC[2;15;1,|` = red) is confirmed working by a WT maintainer. Verify both live; if slot 262 fails, quantize to the 16-color palette or redefine a high classic slot.

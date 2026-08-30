@@ -14,6 +14,7 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
 1. **Repo color identity.** Deterministic mapping: repo identity -> hue. Same repo always gets the same color, in every window, across restarts. Outside a git repo, the working folder is the identity instead, so every window still gets a color; branch shades only exist inside repos.
 2. **Branch shades.** Same repo on different branches gets distinguishable shades of that repo's hue. main/master is the base shade.
 3. **Background tint.** The terminal background is tinted with a dark version of the repo color (OSC 11). Works in windows AND tabs.
+   **Tab color.** The tab header itself is painted with the repo color, so tabs in one window are tellable apart from the tab strip alone. Windows Terminal supports this since v1.15 via the DECAC escape (`ESC[2;<fg>;<bg>,|` plus an `OSC 4` palette redefinition for exact RGB); iTerm2 via its `OSC 6;1;bg` escapes. Emitted per prompt from the same hook, gated on terminal detection (`WT_SESSION` / `TERM_PROGRAM`). Caveat: a tab launched with `--tabColor` on its command line cannot be overridden.
 4. **Real window frame color.** The OS window border + title bar are painted with the repo color, via a per-OS frame adapter. v0 ships the Windows 11 adapter (DWM API). Works when each session has its own window.
 5. **Latest prompt in the title.** Window title shows `repo · branch · <first ~60 chars of the latest prompt>`, updated on every prompt. The title bar is the always-visible "what am I working on here" line.
 6. **One-command install.** `npx` installer registers the hooks in `~/.claude/settings.json` (merge + backup, never overwrite).
@@ -23,7 +24,7 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
 2. **NOT Windows-locked, and NOT blocked on other OSes either.** The core (color contract, tint, title, hook, tty) is OS-neutral by design and must never take a Windows-only dependency. Frame painting is a per-OS adapter: Windows 11 ships in v0; macOS/Linux adapters follow. v0 ships when Windows works.
 3. **NOT the cross-app overlay.** Coloring Slack/Devin/browser/other-agent windows is Lane B (a separate overlay app). The MVP only defines the color contract Lane B will reuse.
 4. **NOT a session manager or dashboard.** No session list, no switching UI, no task board. aura identifies windows; it does not manage them.
-5. **NOT a per-tab colorizer.** Tabs in one Windows Terminal window share one frame. Tabs get tint + title only; frame color targets one-window-per-session use.
+5. **NOT a per-tab FRAME.** The OS window frame (DWM border + title bar) is per-window by OS design; tabs in one window share it, and it shows the color of the session you most recently typed in. Per-tab identity comes from tab color + tint + title, not the frame.
 6. **NOT a statusline replacement.** claude-hud stays. A statusline integration (show latest prompt at the bottom) is a possible later add-on, not MVP.
 7. **NOT a telemetry product.** Local only. No network calls, no analytics, nothing leaves the machine.
 
