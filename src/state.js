@@ -38,6 +38,18 @@ function writeState(state) {
   fs.renameSync(temp, file);
 }
 
+// Signal 0 = existence probe, no signal delivered. EPERM means the process
+// exists but is not ours - still alive.
+function isProcessAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
 function pruneStale(state, now = Date.now()) {
   for (const [id, session] of Object.entries(state.sessions)) {
     const updated = Date.parse(session.updatedAt || "");
@@ -45,7 +57,25 @@ function pruneStale(state, now = Date.now()) {
       delete state.sessions[id];
     }
   }
+  // Rainbow loops that died (window closed, 12 h cap) leave their pid behind;
+  // drop those, then drop frame owners for windows no live session or loop
+  // still tracks. Order matters: a loop's hwnd counts as tracked only while
+  // its pid is alive.
+  const trackedHwnds = new Set();
+  for (const session of Object.values(state.sessions)) {
+    if (session.hwnd) trackedHwnds.add(String(session.hwnd));
+  }
+  for (const [hwnd, pid] of Object.entries(state.rainbowPid || {})) {
+    if (isProcessAlive(pid)) {
+      trackedHwnds.add(hwnd);
+    } else {
+      delete state.rainbowPid[hwnd];
+    }
+  }
+  for (const hwnd of Object.keys(state.frameOwner || {})) {
+    if (!trackedHwnds.has(hwnd)) delete state.frameOwner[hwnd];
+  }
   return state;
 }
 
-module.exports = { readState, writeState, pruneStale, stateDir, stateFile };
+module.exports = { readState, writeState, pruneStale, stateDir, stateFile, isProcessAlive };

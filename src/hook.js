@@ -10,7 +10,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
 const { writeToTerminal } = require("./tty.js");
-const { readState, writeState, pruneStale, stateFile } = require("./state.js");
+const { readState, writeState, pruneStale, stateFile, isProcessAlive } = require("./state.js");
 
 const ESC = "\u001b";
 const BEL = "\u0007";
@@ -40,7 +40,7 @@ function resolveIdentity(cwd, state) {
   const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
   if (!combined) {
     const normalized = path.resolve(cwd);
-    return { repoId: normalized, branch: null, name: path.basename(normalized) };
+    return { repoId: normalized, branch: null, name: path.basename(normalized), isRepo: false };
   }
   const lines = combined.split(/\r?\n/);
   const root = lines[0];
@@ -49,7 +49,7 @@ function resolveIdentity(cwd, state) {
   if (!(root in remotes)) {
     remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
   }
-  return { repoId: remotes[root] || root, branch, name: path.basename(root) };
+  return { repoId: remotes[root] || root, branch, name: path.basename(root), isRepo: true };
 }
 
 // Prompt text lands inside an escape sequence: strip control bytes so it can
@@ -120,6 +120,33 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay) {
   }
 }
 
+// Background hue-cycle loop for non-repo windows (PRD post-MVP 1). The loop
+// polices its own exit (window gone, 12 h cap, or a repo session taking frame
+// ownership). MUST be launched via Start-Process, not spawned directly: the
+// hook's whole process tree is cleaned up when the hook exits (measured
+// 2026-08-30 - a node child_process.spawn survives ~1 s, unref or not), and
+// Start-Process breaks the loop out of that tree with its own hidden console.
+// Same survival pattern as frame-win.ps1's delayed VT writer. -PassThru hands
+// back the grandchild pid for the state.rainbowPid dedup. Sync cost ~400 ms,
+// paid only when a non-repo session has no live loop.
+function startRainbow(hwnd) {
+  const adapter = path.join(__dirname, "adapters", "rainbow-win.ps1");
+  const launch = "(Start-Process -PassThru -WindowStyle Hidden powershell.exe -ArgumentList " +
+    "'-NoProfile','-ExecutionPolicy','Bypass','-File','" + adapter + "'," +
+    "'-Hwnd','" + String(hwnd) + "','-StateFile','" + stateFile() + "').Id";
+  try {
+    const out = execFileSync("powershell.exe", ["-NoProfile", "-Command", launch], {
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    }).toString().trim();
+    const pid = parseInt(out, 10);
+    return Number.isFinite(pid) && pid > 0 ? pid : null;
+  } catch (err) {
+    return null;
+  }
+}
+
 function main() {
   let raw = "";
   try { raw = fs.readFileSync(0, "utf8"); } catch (err) { /* no stdin */ }
@@ -159,12 +186,34 @@ function main() {
   // backstop, then never again.
   const needsFrame = !session.hwnd || session.frameHex !== colors.frameHex;
   const needsVt = process.platform === "win32" && session.vtHex !== colors.frameHex;
+  let painted = false;
   if (needsFrame || needsVt) {
     const vtDelay = isPrompt ? null : { ms: 2000, sessionId };
     const hwnd = paintFrame(colors.frameHex, session.hwnd || null, escapes, vtDelay);
     if (hwnd) {
       session.hwnd = hwnd;
+      painted = true;
       if (isPrompt && needsVt) session.vtHex = colors.frameHex;
+    }
+  }
+  // Frame ownership + rainbow lifecycle, both keyed by HWND (tabs share the
+  // window frame; two non-repo tabs must share ONE loop, and a repo paint
+  // must be able to stop it). Non-repo sessions mark the window "rainbow" and
+  // keep a loop alive on it; repo sessions record ownership on every paint,
+  // which the loop sees before its next write and exits.
+  if (process.platform === "win32" && session.hwnd) {
+    const hwndKey = String(session.hwnd);
+    if (!identity.isRepo) {
+      const owners = state.frameOwner || (state.frameOwner = {});
+      owners[hwndKey] = "rainbow";
+      const loops = state.rainbowPid || (state.rainbowPid = {});
+      if (!isProcessAlive(loops[hwndKey])) {
+        const pid = startRainbow(session.hwnd);
+        if (pid) loops[hwndKey] = pid;
+      }
+    } else if (painted) {
+      const owners = state.frameOwner || (state.frameOwner = {});
+      owners[hwndKey] = sessionId;
     }
   }
   session.repoId = identity.repoId;
