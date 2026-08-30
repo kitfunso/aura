@@ -11,7 +11,8 @@ function identityFrom({ gitCombined, remoteUrl, cwd }) {
   }
   const lines = gitCombined.split(/\r?\n/);
   const root = lines[0];
-  const branch = lines[1] || null;
+  // "HEAD" means unborn (no commits yet) or detached: a repo, with no branch.
+  const branch = lines[1] && lines[1] !== "HEAD" ? lines[1] : null;
   return { repoId: remoteUrl || root, branch, name: path.basename(root), isRepo: true };
 }
 

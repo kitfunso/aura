@@ -48,6 +48,8 @@ aura/
   src/
     color.js             # THE COLOR CONTRACT (see below) - pure, no I/O
     hook.js              # hook entry: reads stdin JSON, emits escapes, updates state
+    decide.js            # pure decision core: identity precedence + event routing
+    git.js               # the git probe: repo root, branch, cached origin remote
     tty.js               # opens the live terminal device: CONOUT$ (win32), /dev/tty (POSIX)
     state.js             # read/write local state (per-OS app-data dir)
     adapters/
@@ -128,6 +130,7 @@ No network API. The "API" is two OS/CLI surfaces:
 - `hook.js` owns Claude Code integration (stdin parsing, event routing, state, escapes). It never contains Win32 knowledge.
 - `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color and `-Reset` returns the frame to the system default (see Window ownership). `frame-win.ps1` (Win32/DWM) is the v0 adapter.
 - `decide.js` owns every what-to-do rule: identity precedence, when to spawn, who paints, who owns a window. It is pure, so the rules are testable without a desktop.
+- `git.js` owns the only git spawns. It reads git's OUTPUT, never its exit code: `git rev-parse --show-toplevel --abbrev-ref HEAD` exits 128 on a repo with no commits yet (unborn HEAD) while still printing a valid toplevel on stdout. Gating on the exit code made every commitless repo look like a bare folder, which after the no-repo-no-color rule meant no color at all (measured 2026-08-30 on `C:/Users/skf_s/bitfall`). A branch line of literally `HEAD` means unborn or detached: a repo, with no branch. `test/git.test.js` drives real repos created with `git init`.
 - `install.js` owns settings.json editing. It must back up settings.json before writing (matches the user's pre-write-guard convention).
 
 ## Data Flow (primary case: new session starts)

@@ -8,8 +8,9 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
 const {
-  identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
+  decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
 } = require("./decide.js");
+const { resolveIdentity } = require("./git.js");
 const { writeToTerminal } = require("./tty.js");
 const { readState, writeState, pruneStale, stateFile } = require("./state.js");
 
@@ -19,34 +20,6 @@ const PROMPT_SNIPPET_LEN = 60;
 // Palette slot redefined to carry the tab RGB, then selected with DECAC.
 // Slot 262 recolors the pane background on Windows Terminal stable; keep 200.
 const TAB_COLOR_SLOT = 200;
-
-function runGit(cwd, args) {
-  try {
-    return execFileSync("git", ["-C", cwd].concat(args), {
-      timeout: 1500,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).toString().trim() || null;
-  } catch (err) {
-    return null;
-  }
-}
-
-// One git spawn on the hot path; the remote URL is cached per repo root.
-function resolveIdentity(cwd, state, recheckNullRemote) {
-  const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
-  let remoteUrl = null;
-  if (combined) {
-    const root = combined.split(/\r?\n/)[0];
-    const remotes = state.remotes || (state.remotes = {});
-    // Recheck nulls at session start only: a repo that gains an origin remote
-    // must stop using its path color, but the prompt path stays at one spawn.
-    if (!(root in remotes) || (recheckNullRemote && remotes[root] === null)) {
-      remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
-    }
-    remoteUrl = remotes[root];
-  }
-  return identityFrom({ gitCombined: combined, remoteUrl, cwd });
-}
 
 // Prompt text lands inside an escape sequence: strip control bytes so it can
 // never terminate or inject a sequence of its own.

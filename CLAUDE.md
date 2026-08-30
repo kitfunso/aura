@@ -4,7 +4,7 @@
 aura color-codes Claude Code terminal windows on Windows 11: repo = hue, branch = shade, latest prompt in the window title. It is hooks + OS APIs only. Docs: `docs/PRD.md` (scope), `docs/ARCHITECTURE.md` (design).
 
 ## Architecture
-Four parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/hook.js` (Claude Code hook integration), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
+Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/decide.js` (pure decision core), `src/git.js` (the only git spawns), `src/hook.js` (Claude Code hook integration), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
 
 ## Non-Negotiable Rules
 1. **Never fork, patch, or wrap the Claude Code binary.** Hooks and OS APIs only. Why: survives every Claude Code update.
@@ -34,6 +34,7 @@ Four parts with hard boundaries: `src/color.js` (pure color math - THE contract 
 - Win32 calls are read-only except `DwmSetWindowAttribute` on the one HWND we handshook. Never enumerate-and-modify other windows.
 
 ## Common Mistakes to Avoid
+- Treating a non-zero git exit as "not a repo" - `git rev-parse --show-toplevel --abbrev-ref HEAD` exits 128 on a repo with no commits yet and still prints the toplevel. Read the output, not the exit code. Since no repo now means no color, this made every commitless repo lose its color entirely.
 - Writing escapes to stdout in a hook (see rule 3) - it silently does nothing visible and injects garbage context.
 - Trusting a successful CONOUT$ write from a hook as proof of visible delivery - Windows hooks own a hidden console, so the write "succeeds" invisibly. Visible proof is pixels (screenshot) or the AttachConsole path.
 - Attaching to the NEAREST console ancestor - the hook's own node/cmd parents hold the hidden console too. Attach topmost-first; GUI ancestors refuse and are skipped.
