@@ -1,0 +1,15 @@
+{
+  "name": "aura",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Color identity for Claude Code terminal windows: repo = hue, branch = shade, latest prompt in the title.",
+  "bin": {
+    "aura-install": "bin/install.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
