@@ -25,7 +25,7 @@
     "access": "public"
   },
   "scripts": {
-    "test": "node --test"
+    "test": "node scripts/check-comments.js && node --test"
   },
   "engines": {
     "node": ">=18"

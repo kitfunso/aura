@@ -36,7 +36,8 @@ On every Claude Code session start and prompt, a hook:
 
 Colors are deterministic: the same repo maps to the same hue on every machine,
 every restart. Branches get discrete shades of the repo hue; main/master is
-the base shade. Outside a git repo the working folder is the identity.
+the base shade. Outside a git repo there is no color: the window keeps your
+terminal's own default, so a colored window always means a project.
 
 ## Install
 

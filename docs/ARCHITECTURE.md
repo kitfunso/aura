@@ -73,14 +73,14 @@ No database. One JSON state file: `%LOCALAPPDATA%/aura/state.json`.
       "isRepo": true,            // repoId is a path either way, so it cannot carry this
       "frameHex": "#266ed9",     // last painted color; a mismatch is what triggers a repaint
       "vtHex": "#266ed9",        // last color whose escapes visibly landed; skips re-delivery
+      "frameCleared": true,      // off-repo only: the frame was reset to default already
       "tty": "\\\\.\\CONOUT$",
       "lastPrompt": "fix the decay test",
       "updatedAt": "2026-08-30T12:00:00Z"
     }
   },
   "remotes": { "C:/Users/x/hippo": "git@github.com:kitfunso/hippo.git" },
-  "frameOwner": { "123456": "<session_id> | rainbow" },
-  "rainbowPid": { "123456": 4242 }
+  "frameOwner": { "123456": "<session_id> | cleared" }
 }
 ```
 
@@ -90,10 +90,15 @@ Constraints: file is small, rewritten atomically (write temp + rename). Stale se
 
 Tabs share one window frame, so the frame color is a property of the WINDOW, not of whichever tab wrote last. Two rules settle every conflict:
 
-1. **A repo session outranks a bare shell.** A non-repo session (a shell in the home directory) claims the window for the hue-cycle loop only when no live repo session shares it, and it never writes the frame color itself: `decideEvent` returns `paintsFrame: false` and the hook passes `-NoPaint`, so the adapter resolves the HWND without touching the color. `rainbow-win.ps1` is the painter for those windows, and it stands down the moment `frameOwner[hwnd]` names a session.
-2. **A repo session takes its frame back.** If its window is still rainbow-owned, the session repaints once (`reclaimFrame`) even when every cached value matches, and that paint writes `frameOwner[hwnd] = sessionId`, which the loop sees before its next write.
+1. **No repo, no color.** A session outside a git repo writes nothing colored: no background tint, no tab color, no frame. `decideEvent` returns `usesColor: false`, so the hook builds a title-only escape string, and `resetFrame: true`, so the adapter writes `DWMWA_COLOR_DEFAULT` (`-Reset`) once and the window goes back to the terminal's own frame. The reset is marked `frameCleared` on the session, so later prompts stay spawn-free.
+2. **A repo session outranks a bare shell.** The reset must never strip a color a repo tab in the same window owns. The hook passes the live repo sessions' HWNDs as `-SkipHwnds` and the adapter re-checks the list AFTER resolving the window, because the handle may not be cached yet. A skipped reset leaves the frame alone.
+3. **A repo session takes its frame back.** If `frameOwner[hwnd]` reads `cleared`, the repo session repaints once (`reclaimFrame`) even when every cached value matches, and that paint writes `frameOwner[hwnd] = sessionId`.
 
-Measured 2026-08-30, the case that forced this: 7 sessions all on hwnd 853852, one of them started outside a repo, one `frameOwner` entry reading `rainbow`. Every repo tab lost its color, and because Lane B skips rainbow-owned windows, the terminal got no ring at all.
+Measured 2026-08-30, the case that forced rule 2: 7 sessions all on hwnd 853852, one of them started outside a repo. Every repo tab lost its color.
+
+An earlier version colored non-repo windows with a detached hue-cycle loop (`rainbow-win.ps1`). It was removed on 2026-08-30: off-repo now means the default window, so the loop, its `rainbowPid` state key, and the `rainbow` owner value are gone.
+
+The start-time window is a guess. `GetForegroundWindow()` at SessionStart can land on any window the user happened to be looking at, so the first prompt after a session start re-resolves the handle (`reresolveWindow` in `decide.js`); that event already spawns the adapter for VT delivery, so the correction is free. Measured 2026-08-30: 5 visible Windows Terminal windows, every session in state cached the same hwnd, and only one window wore a color.
 
 ## The Color Contract (Lane B inherits this - do not break casually)
 
@@ -121,7 +126,7 @@ No network API. The "API" is two OS/CLI surfaces:
 ## Service Boundaries
 - `color.js` owns all color math. Nothing else computes colors.
 - `hook.js` owns Claude Code integration (stdin parsing, event routing, state, escapes). It never contains Win32 knowledge.
-- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color (see Window ownership). `frame-win.ps1` (Win32/DWM) and `rainbow-win.ps1` (hue loop) are the v0 adapters.
+- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color and `-Reset` returns the frame to the system default (see Window ownership). `frame-win.ps1` (Win32/DWM) is the v0 adapter.
 - `decide.js` owns every what-to-do rule: identity precedence, when to spawn, who paints, who owns a window. It is pure, so the rules are testable without a desktop.
 - `install.js` owns settings.json editing. It must back up settings.json before writing (matches the user's pre-write-guard convention).
 
@@ -155,4 +160,5 @@ Rules: a missing frame adapter degrades to tint + title, never errors. iTerm2 ta
 - **Per-prompt title updates do not work on Windows** (they would need a per-prompt attach spawn, which the budget bans). In practice Claude Code itself sets the tab title to the latest prompt text, which covers the "latest prompt floating at the top" ask natively; aura's `repo · branch` title lands at paint events and is best-effort (observed surviving on idle tabs).
 - **Tabs share one frame** (DWM is per-window). Precisely: the frame keeps the color of the last session that PAINTED it - sessions repaint only on first paint or color change, so a prompt in another tab does not reclaim the frame (observed live: pink -> blue -> pink across three sessions in one window). For one-window-per-session workflows the frame is always right. Per-tab identity = tab color + tint + title. Tab color, MEASURED 2026-08-30 (screenshot-verified on WT stable): `OSC 4;200;rgb:RR/GG/BB` + DECAC `ESC[2;15;200,|` sets the tab to the exact RGB; the basic form `ESC[2;15;1,|` (16-color red) also works. The PR #13058 extended slot 262 recolors the PANE BACKGROUND on this build, not the tab (`OSC 104;262` undoes that). Caveat: a tab launched with `--tabColor` cannot be overridden by the escape.
 - **MEASURED 2026-08-30: DWM caption color is INVISIBLE in stock Windows Terminal** - WT draws its own tab strip over the title bar, so only the 1 px border shows from the frame paint (and snapped/maximized edges hide most of it). In tabbed layouts the tab color + tint ARE the identity; the frame is a bonus for floating windows. Keep painting both DWM attributes: caption shows on conhost and any terminal with a standard title bar.
+- **MEASURED 2026-08-30: the start-time foreground window is a guess.** With five terminal windows open, every session had cached the SAME HWND, because each session started while the user was still looking at another window. A session start cannot prove where it lives; the first prompt can, and it already spawns for the VT backstop. So the first prompt after a start re-resolves the handle (`reresolveWindow` in `decide.js`) and later prompts trust the cache, keeping the steady-state path spawn-free.
 - **Headless guard (design fix 2026-08-30, broadened same day):** the foreground handshake only runs when a known terminal marker is in the environment (`WT_SESSION`, `WEZTERM_PANE`, `ALACRITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR` - see `TERMINAL_MARKERS` in `src/decide.js`). Cron / Task Scheduler / service-spawned `claude -p` sessions carry no marker, and grabbing the foreground window there would paint an unrelated window the wrong color. The adapter's process-name allowlist is the second layer: even with a marker present, only a terminal-process foreground window is ever painted. `WT_SESSION` is measured on this box; the other markers come from each terminal's docs and are best-effort until tested live. Plain conhost sets no marker and never gets a first paint (tint + title only). Cached-HWND repaints stay allowed.

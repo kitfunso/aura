@@ -1,19 +1,12 @@
-# aura frame adapter, Windows 11 build 22000+.
-# First paint: no -Hwnd given. Takes GetForegroundWindow() (the window the user
-#   just typed in) and paints it ONLY if it belongs to an allowlisted terminal
-#   process, so an alt-tab race can never paint another app.
-# Repaint: -Hwnd <n> reuses the cached handle, no foreground lookup.
-# VT delivery: -VtB64 <base64 UTF-8 escape payload>. Claude Code spawns hooks
-#   with their own hidden console (measured 2026-08-30: the hook's CONOUT$ write
-#   succeeds but is invisible), so the payload is written by attaching to the
-#   TOPMOST console-attached ancestor - that is the tab's real console. GUI
-#   ancestors (WindowsTerminal, explorer) refuse AttachConsole and are skipped.
-# Prints the painted HWND as a decimal integer on stdout FIRST (the VT step
-#   detaches the console and must not disturb the result protocol), or 0.
+# aura frame adapter, Windows 11 build 22000+. Paints one window frame and
+# delivers the VT payload into the tab's real console. Design: docs/ARCHITECTURE.md.
+# Prints the resolved HWND on stdout first, or 0.
 param(
     [Parameter(Mandatory=$true)][string]$FrameColor,  # RRGGBB, no leading #
     [long]$Hwnd = 0,
     [switch]$NoPaint,          # resolve and report the HWND, but write no color
+    [switch]$Reset,            # write DWMWA_COLOR_DEFAULT: back to the system frame
+    [string]$SkipHwnds = "",   # -Reset only: comma-joined HWNDs a repo session owns
     [string]$VtB64 = "",
     [int]$VtDelayMs = 0,       # >0: hand targets to a delayed hidden writer instead of writing now
     [string]$VtTargets = "",   # delayed-writer mode: comma-joined attach-target PIDs, topmost first
@@ -55,12 +48,8 @@ public static class AuraFrame {
 "@
 
 if ($VtTargets -ne "") {
-    # Delayed-writer mode (grandchild). The parent resolved the attach targets
-    # while the hook's ancestor chain was still alive; a detached process
-    # cannot resolve them itself (the walk only sees live processes and the
-    # hook's node parent is dead before PowerShell even starts). Wait out
-    # Claude Code's TUI init, then deliver - unless a prompt got there first
-    # (vtHex marked in state), in which case its payload is newer than ours.
+    # Delayed writer: the parent resolved the targets while the ancestor chain
+    # was alive. Skip if a prompt already delivered a newer payload.
     if ($VtDelayMs -gt 0) { Start-Sleep -Milliseconds $VtDelayMs }
     if ($StateFile -ne "" -and $SessionId -ne "" -and (Test-Path -LiteralPath $StateFile)) {
         try {
@@ -93,9 +82,18 @@ if ($Hwnd -ne 0) {
 }
 
 if ($target -ne [IntPtr]::Zero) {
-    # Tabs share one window frame, so the color belongs to whichever session
-    # owns the WINDOW. -NoPaint callers (non-repo sessions, whose windows the
-    # hue-cycle loop paints) only need the handle back.
+    # The resolved window may differ from the cached one, so the skip list is
+    # checked here: a repo session's color outranks a bare shell's reset.
+    $skip = $false
+    if ($Reset -and $SkipHwnds -ne "") {
+        $skip = ($SkipHwnds -split "," | Where-Object { $_ -eq ([int64]$target).ToString() }).Count -gt 0
+    }
+    if ($Reset -and -not $skip) {
+        $default = -1  # DWMWA_COLOR_DEFAULT (0xFFFFFFFF)
+        [void][AuraFrame]::DwmSetWindowAttribute($target, 34, [ref]$default, 4)
+        [void][AuraFrame]::DwmSetWindowAttribute($target, 35, [ref]$default, 4)
+    }
+    # -NoPaint callers want the handle only.
     if (-not $NoPaint) {
         # COLORREF is 0x00BBGGRR.
         $r = [Convert]::ToInt32($FrameColor.Substring(0, 2), 16)
@@ -131,9 +129,7 @@ if ($VtB64 -ne "") {
         # nearer ancestors (the hook's own node/cmd) hold the hidden one.
         [array]::Reverse($chain)
         if ($VtDelayMs -gt 0) {
-            # Session start: an immediate write races the TUI init and gets
-            # wiped (measured 2026-08-30). Hand the live-resolved targets to a
-            # hidden detached grandchild that writes after the delay.
+            # An immediate write races the TUI init, so hand off to a grandchild.
             if ($chain.Length -gt 0) {
                 $argList = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $PSCommandPath,
                     "-FrameColor", $FrameColor, "-VtB64", $VtB64,

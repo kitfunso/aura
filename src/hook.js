@@ -1,26 +1,23 @@
 #!/usr/bin/env node
 "use strict";
 // aura hook entry, fired by Claude Code on SessionStart and UserPromptSubmit.
-// Must never block a prompt: every failure path still exits 0 (rule 6), and the
-// per-prompt path spawns no PowerShell (rule 5) - the DWM frame color persists
-// on the window, so a repaint only happens when the color changed or no HWND
-// is cached yet.
+// Never blocks a prompt (rule 6) and never spawns PowerShell on the steady
+// prompt path (rule 5). Why each rule exists: docs/ARCHITECTURE.md.
 const fs = require("fs");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor } = require("./color.js");
-const { identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession } = require("./decide.js");
+const {
+  identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
+} = require("./decide.js");
 const { writeToTerminal } = require("./tty.js");
-const { readState, writeState, pruneStale, stateFile, isProcessAlive } = require("./state.js");
+const { readState, writeState, pruneStale, stateFile } = require("./state.js");
 
 const ESC = "\u001b";
 const BEL = "\u0007";
 const PROMPT_SNIPPET_LEN = 60;
-// 256-color palette slot aura redefines to carry the exact tab RGB, then
-// points the tab at it via DECAC. MEASURED 2026-08-30 on WT stable: slot 200
-// + DECAC works (tab turns the exact color); the extended slot 262 from
-// PR #13058 recolors the PANE BACKGROUND on this build - do not use it.
-// Cost: TUI apps see 256-color index 200 as the repo color; acceptable.
+// Palette slot redefined to carry the tab RGB, then selected with DECAC.
+// Slot 262 recolors the pane background on Windows Terminal stable; keep 200.
 const TAB_COLOR_SLOT = 200;
 
 function runGit(cwd, args) {
@@ -34,19 +31,15 @@ function runGit(cwd, args) {
   }
 }
 
-// I/O side of identity: one git spawn on the hot path (root + branch
-// together); the remote URL is stable per root, so it is cached in state and
-// looked up at most once. Precedence itself lives in decide.js.
+// One git spawn on the hot path; the remote URL is cached per repo root.
 function resolveIdentity(cwd, state, recheckNullRemote) {
   const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
   let remoteUrl = null;
   if (combined) {
     const root = combined.split(/\r?\n/)[0];
     const remotes = state.remotes || (state.remotes = {});
-    // A cached null would otherwise stick forever: a repo that GAINS an origin
-    // remote after first sighting would keep its path-based color and disagree
-    // with every other clone. Recheck nulls on SessionStart only, so the
-    // per-prompt path stays at one git spawn (rule 5).
+    // Recheck nulls at session start only: a repo that gains an origin remote
+    // must stop using its path color, but the prompt path stays at one spawn.
     if (!(root in remotes) || (recheckNullRemote && remotes[root] === null)) {
       remotes[root] = runGit(cwd, ["config", "--get", "remote.origin.url"]);
     }
@@ -61,7 +54,8 @@ function sanitizeForTitle(text) {
   return String(text).replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function buildEscapes(colors, title) {
+function buildEscapes(colors, title, usesColor) {
+  if (!usesColor) return `${ESC}]0;${title}${BEL}`;
   let out = `${ESC}]11;${colors.tintHex}${BEL}`;
   const hex = colors.frameHex;
   if (process.env.WT_SESSION) {
@@ -82,14 +76,10 @@ function buildEscapes(colors, title) {
   return out;
 }
 
-function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, paintsFrame) {
+function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, mode) {
   if (process.platform !== "win32") return null;
-  // A foreground handshake is only safe when this session lives in a terminal
-  // the user launched. Every supported terminal marks its child environment
-  // (decide.js TERMINAL_MARKERS); headless runs (cron, Task Scheduler,
-  // claude -p from a service) carry no marker, and grabbing the foreground
-  // window there would paint an unrelated window. A cached HWND is always
-  // safe to repaint.
+  // Without a terminal marker this is a headless run, where the foreground
+  // window belongs to some unrelated app. A cached handle is always safe.
   if (!cachedHwnd && !hasTerminalMarker(process.env)) return null;
   const adapter = path.join(__dirname, "adapters", "frame-win.ps1");
   const args = [
@@ -97,16 +87,14 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, paintsFrame) {
     "-FrameColor", frameHex.slice(1),
   ];
   if (cachedHwnd) args.push("-Hwnd", String(cachedHwnd));
-  // The adapter still resolves and returns the HWND, it just does not write the
-  // color: a non-repo session needs its window handle (to key the rainbow loop
-  // and frame ownership) without touching a frame a repo sibling may own.
-  if (!paintsFrame) args.push("-NoPaint");
-  // Windows hooks get their own hidden console (measured), so the direct
-  // CONOUT$ write above lands nowhere visible; the adapter re-delivers the
-  // escapes into the tab's real console via ancestor AttachConsole. With
-  // vtDelay, the adapter instead hands its live-resolved attach targets to a
-  // detached hidden writer that fires after Claude Code's TUI init - the
-  // ancestry walk must run NOW, while this process still anchors the chain.
+  // Resolve the handle without writing a color a repo sibling may own.
+  if (mode.name !== "paint") args.push("-NoPaint");
+  if (mode.name === "reset") {
+    args.push("-Reset");
+    if (mode.skipHwnds.length) args.push("-SkipHwnds", mode.skipHwnds.join(","));
+  }
+  // The hook's own console is hidden, so the adapter re-delivers the escapes
+  // into the tab's real console.
   if (vtPayload) {
     args.push("-VtB64", Buffer.from(vtPayload, "utf8").toString("base64"));
     if (vtDelay) {
@@ -128,37 +116,6 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, paintsFrame) {
   }
 }
 
-// Background hue-cycle loop for non-repo windows (PRD post-MVP 1). The loop
-// polices its own exit (window gone, 12 h cap, or a repo session taking frame
-// ownership). MUST be launched via Start-Process, not spawned directly: the
-// hook's whole process tree is cleaned up when the hook exits (measured
-// 2026-08-30 - a node child_process.spawn survives ~1 s, unref or not), and
-// Start-Process breaks the loop out of that tree with its own hidden console.
-// Same survival pattern as frame-win.ps1's delayed VT writer. -PassThru hands
-// back the grandchild pid for the state.rainbowPid dedup. Sync cost ~400 ms,
-// paid only when a non-repo session has no live loop.
-function startRainbow(hwnd) {
-  const adapter = path.join(__dirname, "adapters", "rainbow-win.ps1");
-  // Both paths land inside single-quoted PowerShell arguments; a quote in the
-  // install path (a username like O'Brien) would end the argument early and
-  // kill the launch. Doubling is PowerShell's escape for ' inside '...'.
-  const psq = function (s) { return String(s).replace(/'/g, "''"); };
-  const launch = "(Start-Process -PassThru -WindowStyle Hidden powershell.exe -ArgumentList " +
-    "'-NoProfile','-ExecutionPolicy','Bypass','-File','" + psq(adapter) + "'," +
-    "'-Hwnd','" + String(hwnd) + "','-StateFile','" + psq(stateFile()) + "').Id";
-  try {
-    const out = execFileSync("powershell.exe", ["-NoProfile", "-Command", launch], {
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true,
-    }).toString().trim();
-    const pid = parseInt(out, 10);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
-  } catch (err) {
-    return null;
-  }
-}
-
 function main() {
   let raw = "";
   try { raw = fs.readFileSync(0, "utf8"); } catch (err) { /* no stdin */ }
@@ -174,16 +131,14 @@ function main() {
   const titleParts = [identity.name];
   if (identity.branch) titleParts.push(identity.branch);
   if (event.prompt) titleParts.push(sanitizeForTitle(event.prompt).slice(0, PROMPT_SNIPPET_LEN));
-  const escapes = buildEscapes(colors, titleParts.join(" · "));
-  // Direct tty write: the visible path where the hook shares the terminal's
-  // console (POSIX /dev/tty). On Windows it lands in the hook's own hidden
-  // console (harmless); the adapter spawn below is the visible delivery there.
+  const escapes = buildEscapes(colors, titleParts.join(" · "), identity.isRepo);
+  // The visible path on POSIX. On Windows this lands in the hook's hidden
+  // console and the adapter spawn below does the visible delivery.
   const ttyTarget = writeToTerminal(escapes);
 
   const session = state.sessions[sessionId] || {};
   session.tty = ttyTarget;
-  // The what-to-do call is pure (decide.js documents the why of each rule);
-  // everything below just executes the plan.
+  // decide.js decides; everything below only executes the plan.
   const owners = state.frameOwner || (state.frameOwner = {});
   const plan = decideEvent({
     eventName: event.hook_event_name,
@@ -191,49 +146,41 @@ function main() {
     session,
     frameHex: colors.frameHex,
     isRepo: identity.isRepo,
-    windowRainbowOwned: Boolean(session.hwnd && owners[String(session.hwnd)] === "rainbow"),
+    windowFrameCleared: Boolean(session.hwnd && owners[String(session.hwnd)] === "cleared"),
   });
   if (plan.clearHandshake) {
     delete session.hwnd;
     delete session.vtHex;
   }
+  if (plan.clearHandshake) delete session.frameCleared;
   let painted = false;
+  let cleared = false;
   if (plan.spawnAdapter) {
     const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId } : null;
-    const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, escapes, vtDelay, plan.paintsFrame);
+    // The adapter re-checks the list: the window it resolves may not be cached yet.
+    const mode = plan.paintsFrame ? { name: "paint" }
+      : plan.resetFrame ? { name: "reset", skipHwnds: repoSessionHwnds(state.sessions, sessionId) }
+      : { name: "none" };
+    const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, escapes, vtDelay, mode);
     if (hwnd) {
       session.hwnd = hwnd;
-      // Ownership follows the actual color write, not the handle lookup: a
-      // -NoPaint call resolves the window without claiming it.
+      // Ownership follows the color write, not the handle lookup.
       painted = plan.paintsFrame;
+      cleared = mode.name === "reset" &&
+        !windowHasRepoSession(state.sessions, hwnd, sessionId);
+      if (cleared) session.frameCleared = true;
       if (plan.markVtHex) session.vtHex = colors.frameHex;
     }
   }
-  // Frame ownership + rainbow lifecycle, both keyed by HWND (tabs share the
-  // window frame; two non-repo tabs must share ONE loop, and a repo paint
-  // must be able to stop it). Non-repo sessions mark the window "rainbow" and
-  // keep a loop alive on it; repo sessions record ownership on every paint,
-  // which the loop sees before its next write and exits.
-  if (session.hwnd) {
+  // Ownership is keyed by HWND, because tabs share one frame.
+  if (session.hwnd && process.platform === "win32") {
     const hwndKey = String(session.hwnd);
-    // A non-repo session only claims the window when it is alone in it: a
-    // repo tab sharing the window keeps its own color for the whole frame.
-    const sharedWithRepo = windowHasRepoSession(state.sessions, session.hwnd, sessionId);
-    if (plan.wantsRainbow && !sharedWithRepo) {
-      owners[hwndKey] = "rainbow";
-      const loops = state.rainbowPid || (state.rainbowPid = {});
-      if (!isProcessAlive(loops[hwndKey])) {
-        const pid = startRainbow(session.hwnd);
-        if (pid) loops[hwndKey] = pid;
-      }
-    } else if (process.platform === "win32" && painted) {
-      owners[hwndKey] = sessionId;
-    }
+    if (painted) owners[hwndKey] = sessionId;
+    else if (cleared) owners[hwndKey] = "cleared";
   }
   session.repoId = identity.repoId;
   session.branch = identity.branch;
-  // Persisted so sibling tabs can tell a repo session from a bare shell:
-  // repoId is a path either way, so it cannot carry that distinction.
+  // repoId is a path either way, so it cannot tell a repo from a bare shell.
   session.isRepo = identity.isRepo;
   session.frameHex = colors.frameHex;
   if (event.prompt) session.lastPrompt = sanitizeForTitle(event.prompt).slice(0, 200);

@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 "use strict";
-// aura installer: merges the SessionStart + UserPromptSubmit hook entries into
-// ~/.claude/settings.json. Rule 4: back up first, merge, NEVER overwrite other
-// settings. Idempotent: re-running adds nothing. --uninstall removes only
-// aura's entries. --settings <path> targets a different file (testing the
-// merge against a copy, non-standard setups).
+// Merges aura's two hook entries into ~/.claude/settings.json. Rule 4: back up
+// first, merge, NEVER overwrite. Flags: --uninstall, --settings <path>.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -44,9 +41,7 @@ function main() {
     process.exit(1);
   }
 
-  // The backup exists to preserve the PRE-aura settings. Later runs (upgrade,
-  // uninstall) must not clobber the only copy of that state with an
-  // aura-present version, so only the first run writes it.
+  // Only the first run writes the backup: it holds the pre-aura settings.
   if (!fs.existsSync(BACKUP_FILE)) fs.writeFileSync(BACKUP_FILE, raw);
 
   if (!settings.hooks || typeof settings.hooks !== "object") settings.hooks = {};
@@ -65,9 +60,7 @@ function main() {
   }
 
   if (changed) {
-    // settings.json carries the user's whole hook/permission config (rule 4):
-    // a crash mid-write must never leave it truncated. Temp + rename is atomic
-    // on the same volume.
+    // Temp + rename: a crash mid-write must never truncate the user's settings.
     const tmp = SETTINGS_FILE + ".aura-tmp";
     fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + "\n");
     fs.renameSync(tmp, SETTINGS_FILE);

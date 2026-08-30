@@ -27,9 +27,9 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
 5. **NOT a per-tab FRAME.** The OS window frame (DWM border + title bar) is per-window by OS design; tabs in one window share it, and it shows the color of the session you most recently typed in. Per-tab identity comes from tab color + tint + title, not the frame.
 6. **NOT a statusline replacement.** claude-hud stays. A statusline integration (show latest prompt at the bottom) is a possible later add-on, not MVP.
 7. **NOT a telemetry product.** Local only. No network calls, no analytics, nothing leaves the machine.
+8. **NOT an identity for windows with no project.** A session outside a git repo gets no color at all: no tint, no tab color, no frame. The window keeps the terminal's own default, which is what "no project" should look like. A hue-cycling frame shipped for this case on 2026-08-30 and was removed the same day: color means a repo, so coloring "no repo" made every window look assigned.
 
 ## Post-MVP Candidates (recorded, not in scope for v0)
-- **Rainbow frame for non-repo windows.** The DWM border is one uniform color, so "running around the frame" is not possible with it; a slow hue-CYCLE (whole frame drifts through the rainbow, repaint every ~2 s via a lightweight timer) is possible and makes "no project assigned" unmistakable. A true chasing rainbow gradient needs the Lane B overlay renderer. Phase 2 decision.
 - macOS adapters (tint + title + iTerm2 tab color run from the same core already; frame overlay needs a Mac).
 - Statusline integration (latest prompt at the bottom via claude-hud).
 - Lane B: the cross-app overlay for Slack/Devin/browser/other-agent windows.

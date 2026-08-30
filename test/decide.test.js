@@ -2,7 +2,9 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
-const { identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession } = require("../src/decide.js");
+const {
+  identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
+} = require("../src/decide.js");
 
 // -- identityFrom: origin remote URL > repo root path > cwd --
 
@@ -58,10 +60,8 @@ test("color change re-fires paint and re-marks delivery", () => {
   assert.strictEqual(plan.vtDelayMs, 0);
 });
 
-// -- Measured trap 1 (2026-08-30): an immediate SessionStart VT write races
-// Claude Code's TUI init and gets wiped. SessionStart must route delivery
-// through the delayed writer and must NEVER mark vtHex itself - the first
-// prompt is the re-delivery backstop. --
+// -- Measured traps (ARCHITECTURE.md Known Risks). Trap 1: a SessionStart VT
+// write races Claude Code's TUI init, so it delays and never marks vtHex. --
 
 test("regression: SessionStart delays delivery and never marks vtHex", () => {
   const plan = decideEvent({
@@ -73,10 +73,8 @@ test("regression: SessionStart delays delivery and never marks vtHex", () => {
   assert.strictEqual(plan.markVtHex, false);
 });
 
-// -- Measured trap 2 (2026-08-30): a resumed session can land in a brand-new
-// tab or window while state still carries the old handshake. SessionStart
-// must drop the cached hwnd + vtHex so the session re-handshakes where it
-// lives NOW, even when every cached value still matches. --
+// -- Trap 2: a resumed session can land in a brand-new tab or window, so
+// SessionStart drops the cached hwnd + vtHex even when they still match. --
 
 test("regression: SessionStart re-handshakes despite a fully-matching cache", () => {
   const plan = decideEvent({
@@ -101,6 +99,24 @@ test("prompt marks vtHex only when delivery is still owed", () => {
   assert.strictEqual(settled.markVtHex, false);
 });
 
+// -- Trap 3: the start-time foreground window is a guess (five windows once
+// shared one cached HWND), so the first prompt re-resolves the handle. --
+
+test("regression: the first prompt re-resolves the window, later prompts trust the cache", () => {
+  const owed = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session: { hwnd: 853852, frameHex: HEX }, frameHex: HEX, isRepo: true,
+  });
+  assert.strictEqual(owed.cachedHwnd, null);      // adapter takes the foreground window
+  assert.strictEqual(owed.spawnAdapter, true);    // the spawn it rides was happening anyway
+  const settled = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session: cachedSession, frameHex: HEX, isRepo: true,
+  });
+  assert.strictEqual(settled.cachedHwnd, 853852); // steady state stays spawn-free
+  assert.strictEqual(settled.spawnAdapter, false);
+});
+
 test("VT delivery is win32-only; POSIX never owes VT", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "linux",
@@ -122,24 +138,38 @@ test("terminal markers: every supported terminal opens the gate, headless does n
   }
 });
 
-// -- Rainbow-vs-frame routing (step 2) --
+// -- No repo, no color --
 
-test("rainbow: non-repo on win32 wants the loop, repo and POSIX do not", () => {
-  const folder = decideEvent({
+test("off-repo sessions use no color at all and reset the frame once", () => {
+  const shell = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
     session: {}, frameHex: HEX, isRepo: false,
   });
-  assert.strictEqual(folder.wantsRainbow, true);
+  assert.strictEqual(shell.usesColor, false);
+  assert.strictEqual(shell.paintsFrame, false);
+  assert.strictEqual(shell.resetFrame, true);
+  assert.strictEqual(shell.spawnAdapter, true);   // the reset needs one spawn
   const repo = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
     session: {}, frameHex: HEX, isRepo: true,
   });
-  assert.strictEqual(repo.wantsRainbow, false);
-  const posix = decideEvent({
-    eventName: "SessionStart", platform: "darwin",
-    session: {}, frameHex: HEX, isRepo: false,
+  assert.strictEqual(repo.usesColor, true);
+  assert.strictEqual(repo.resetFrame, false);
+});
+
+test("the off-repo reset happens once, then the prompt path is spawn-free", () => {
+  const cleared = { hwnd: 853852, frameHex: HEX, vtHex: HEX, frameCleared: true };
+  const settled = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session: cleared, frameHex: HEX, isRepo: false,
   });
-  assert.strictEqual(posix.wantsRainbow, false);
+  assert.strictEqual(settled.spawnAdapter, false);
+  // a session start re-handshakes, so the reset runs again on the new window
+  const restarted = decideEvent({
+    eventName: "SessionStart", platform: "win32",
+    session: cleared, frameHex: HEX, isRepo: false,
+  });
+  assert.strictEqual(restarted.spawnAdapter, true);
 });
 
 // -- Window-scoped ownership: tabs share one frame --
@@ -161,30 +191,35 @@ test("windowHasRepoSession: only a live repo sibling on the SAME window counts",
   assert.strictEqual(windowHasRepoSession({ r: { isRepo: true, hwnd: "853852" } }, 853852, "x"), true);
 });
 
-test("only repo sessions write the frame color; the loop paints the rest", () => {
+test("repoSessionHwnds: live repo siblings only, deduped, as strings", () => {
+  const sessions = {
+    repo: { isRepo: true, hwnd: 853852 },
+    twin: { isRepo: true, hwnd: "853852" },
+    shell: { isRepo: false, hwnd: 111 },
+    other: { isRepo: true, hwnd: 999 },
+    noHwnd: { isRepo: true },
+  };
+  assert.deepStrictEqual(repoSessionHwnds(sessions, "shell"), ["853852", "999"]);
+  assert.deepStrictEqual(repoSessionHwnds(sessions, "repo"), ["853852", "999"]);
+  assert.deepStrictEqual(repoSessionHwnds({}, "x"), []);
+});
+
+test("only repo sessions write the frame color", () => {
   const args = { eventName: "SessionStart", platform: "win32", session: {}, frameHex: HEX };
   assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: true })).paintsFrame, true);
-  // A bare shell must not repaint a window a repo tab may be sharing, and it
-  // does not need to: rainbow-win.ps1 paints every tick once the loop starts.
   assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: false })).paintsFrame, false);
 });
 
-test("reclaim: a repo session repaints while its window is still rainbow-owned", () => {
+test("reclaim: a repo session repaints a window a bare shell cleared", () => {
   const session = { hwnd: 853852, frameHex: HEX, vtHex: HEX };
   const held = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, isRepo: true, windowRainbowOwned: true,
+    session, frameHex: HEX, isRepo: true, windowFrameCleared: true,
   });
-  assert.strictEqual(held.spawnAdapter, true);   // takes the frame back from the loop
+  assert.strictEqual(held.spawnAdapter, true);   // takes its color back
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, isRepo: true, windowRainbowOwned: false,
+    session, frameHex: HEX, isRepo: true, windowFrameCleared: false,
   });
   assert.strictEqual(settled.spawnAdapter, false);   // steady prompt path stays spawn-free
-  // a non-repo session never reclaims: the loop is its own frame
-  const shell = decideEvent({
-    eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, isRepo: false, windowRainbowOwned: true,
-  });
-  assert.strictEqual(shell.spawnAdapter, false);
 });

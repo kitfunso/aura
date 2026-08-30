@@ -1,9 +1,7 @@
 "use strict";
-// bin/install.js exercised through its CLI against --settings targets in a
-// temp directory. The installer writes the user's whole hook config (rule 4),
-// so merge, backup, idempotency, and refusal behavior are tested here, not
-// trusted from inspection. This was the top testing gap in the 2026-08-30
-// review (all I/O orchestration untested).
+// bin/install.js through its CLI, against --settings targets in a temp dir.
+// It writes the user's whole hook config (rule 4), so nothing here is trusted
+// from inspection.
 const test = require("node:test");
 const assert = require("node:assert");
 const { execFileSync } = require("child_process");

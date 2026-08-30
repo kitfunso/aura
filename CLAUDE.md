@@ -19,6 +19,7 @@ Four parts with hard boundaries: `src/color.js` (pure color math - THE contract 
 ## Coding Conventions
 - Plain Node.js, zero runtime dependencies, `node --test` for tests.
 - Small files, verb_noun function names, no abbreviations.
+- Comments: one line, two at most. Say why, never what. Measurement notes and incident history belong in `docs/ARCHITECTURE.md`, not in the code. A file-header block may run to 3 lines. Any longer block has failed this rule; the scan is in `scripts/check-comments.js` and runs in `npm test`.
 - PowerShell 5.1-compatible syntax in `frame.ps1` (no `&&`, no ternary).
 - No em dashes in UI strings or commit messages.
 
