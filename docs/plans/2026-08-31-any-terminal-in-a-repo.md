@@ -67,13 +67,15 @@ The snippet compares `$PWD` against the last value it marked and returns immedia
 
 ### Step 2: the CLI
 **Files:** `bin/aura.js` (new), `package.json`
-**What:** `aura mark [--cwd] [--session] [--title]` prints the escapes on stdout. `aura shell-init [--shell powershell|bash|zsh]` prints the snippet. Register `bin.aura`.
+**What:** `aura mark [--cwd] [--session] [--title]` prints the escapes on stdout. Register `bin.aura`.
 **Verify:** new `test/cli.test.js`: mark in a real repo prints an OSC 11 with the right tint; mark outside a repo prints a title only.
-**Commit:** `feat: aura mark and aura shell-init`
+**Commit:** `feat: aura mark, the agent neutral entry point`
+
+*Amended during execution:* `shell-init` moved to step 3. It serves a file that step 3 creates, so shipping it here would mean one commit with a subcommand that cannot work.
 
 ### Step 3: the shell snippets
-**Files:** `src/shell/powershell.ps1`, `src/shell/posix.sh`
-**What:** wrap the existing prompt, skip when `$PWD` is unchanged, write what `aura mark` printed. Never break the user's prompt if aura fails.
+**Files:** `src/shell/powershell.ps1`, `src/shell/posix.sh`, `bin/aura.js`
+**What:** wrap the existing prompt, skip when `$PWD` is unchanged, write what `aura mark` printed. Never break the user's prompt if aura fails. `aura shell-init [--shell powershell|bash|zsh]` prints the matching snippet.
 **Verify:** live in a real terminal, `cd` between two repos and watch the colour change.
 **Commit:** `feat: shell prompt integration for powershell, bash and zsh`
 

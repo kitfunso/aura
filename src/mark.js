@@ -100,8 +100,9 @@ function mark({
   const escapes = buildEscapes(colors, titleParts.join(" · "), identity.isRepo, env);
 
   const session = state.sessions[sessionId] || {};
-  // A caller that writes to a visible console has already delivered them.
-  if (!redeliverVt && identity.isRepo) session.vtHex = colors.frameHex;
+  // A caller that writes to a visible console has already delivered them, so
+  // caching here is what keeps the adapter off that caller's prompt path.
+  if (!redeliverVt) session.vtHex = colors.frameHex;
   session.tty = sink(escapes);
 
   const owners = state.frameOwner || (state.frameOwner = {});
