@@ -146,13 +146,13 @@ function installShell(shell, uninstall) {
 
 // Taking aura out leaves the window wearing aura's colors, and the code that
 // could give them back is what is being removed.
-function restoreThisTerminal() {
-  try { writeToTerminal(restoreEscapes(process.env)); }
+function restoreThisTerminal(write) {
+  try { write(restoreEscapes(process.env)); }
   catch (err) { /* an uninstall with no terminal to write to still succeeds */ }
 }
 
 function run(uninstall) {
-  if (uninstall) restoreThisTerminal();
+  if (uninstall) restoreThisTerminal(writeToTerminal);
   const shell = argValue("--shell");
   if (shell) {
     if (SHELLS.indexOf(shell) === -1) {
@@ -165,4 +165,4 @@ function run(uninstall) {
   installHooks(uninstall);
 }
 
-module.exports = { run };
+module.exports = { run, restoreThisTerminal };

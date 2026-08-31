@@ -259,6 +259,9 @@ does:
   rides BOTH branches, because a window that never leaves its repo would
   otherwise keep a wrong text color forever. Slot 200 is inside the 256-color
   text palette, so anything printed in color 200 came out as the repo color.
+  It repairs terminals, not aura, so it can be deleted once no tab opened under
+  0.1.0 or 0.1.1 is still alive. A tab lives as long as its window, so treat
+  that as "when 0.1.1 is far enough back to be gone", not a dated release.
 
 Support: OSC 104/110/111/112/117 landed in microsoft/terminal PR #18767, merged
 2025-04-10 and serviced into 1.22 and 1.23. This box runs 1.24.11911.0. The
@@ -270,13 +273,43 @@ terminal it never touched keeps whatever colors the user configured. Delivery is
 once, not per prompt, because the restore changes the `vtSignature` digest and
 the next identical prompt matches the cached one.
 
-Two places outside the prompt path need the same undo: `aura uninstall` writes it
-to the terminal it runs in before removing the code that could, and a session
-whose color is cleared gets it through the same builder.
+One place outside the prompt path needs the same undo: `aura uninstall` writes it
+to the terminal it runs in before removing the code that could. Inside the prompt
+path, a session whose color clears gets it from the same builder.
 
-Known gap: on iTerm2 the background is restored by `OSC 111`, but the tab color
-set through `OSC 6;1;bg;*` is not. The reset form is untested here, and shipping
-an unverified escape is worse than a documented gap.
+Known gap, 0.1.2: `wasColored` reads `session.hasColor`, so the undo is keyed to
+the SESSION, and the thing being undone is the TAB. End a session in a colored
+repo tab, start a fresh one in that same tab, and stay off-repo: the new session
+never set a color, so it sends no restore and the tab stays colored. Closing this
+needs a per-tab identity aura does not have. The frame's HWND ownership cannot
+stand in, because WT tabs share one HWND and the restore would wipe every sibling
+tab. The two real routes are querying the live background with `OSC 11;?` and
+reading the reply off the tty, or dropping the "restore only what aura set"
+guarantee on SessionStart. Both are design calls, not patches.
+
+On iTerm2 the tab color is given back with `OSC 6;1;bg;*;default`, the one reset
+iTerm2 documents for the three setters aura writes
+(https://iterm2.com/documentation-escape-codes.html, "To reset the window title
+and tab color"). Nobody on this box runs iTerm2, so it is covered by a unit test
+on the bytes and not by pixels.
+
+### Silence is not an answer
+
+The restore made a slow `git` expensive. `runGit` returned `null` both when git
+said "not a repo" (exit 128) and when the 1500 ms deadline killed it, so a git
+that missed its deadline under load read as "this window left its repo" and the
+restore fired: a colored window flashed back to the terminal default, then
+colored again on the next prompt. Measured discriminator: a real answer always
+carries a numeric `status`; a killed spawn carries `status: null`,
+`signal: SIGTERM`, `code: ETIMEDOUT` and empty stdout.
+
+`runGit` now returns a `NO_ANSWER` sentinel for a killed spawn only. A missing
+git still returns `null`, because "there is no git here" IS an answer and a box
+without git must still color by tab name. `resolveIdentity` turns `NO_ANSWER`
+into `{ unresolved: true }` (including from the remote-URL probe, where caching a
+timeout as "no origin" would move the color to the path hue), and `mark()` then
+returns early: no escapes, no adapter spawn, no state write. The window keeps
+exactly what it has until git answers.
 
 ## API Design
 

@@ -84,6 +84,24 @@ test("the restore only touches palette slots on a terminal that has them", () =>
   assert.strictEqual(back, ESC + "]111" + BEL, "off Windows Terminal, the background only");
 });
 
+// iTerm2 documents one reset for the tab color it documents three setters for.
+test("iTerm2 gets back the tab color it was given", () => {
+  const iterm = { TERM_PROGRAM: "iTerm.app" };
+  const lit = buildEscapes(COLORS, "", true, iterm, false);
+  assert.ok(lit.includes(ESC + "]6;1;bg;red;brightness;"), "the set branch colors the tab");
+  const back = buildEscapes(COLORS, "", false, iterm, true);
+  assert.strictEqual(back, ESC + "]111" + BEL + ESC + "]6;1;bg;*;default" + BEL);
+});
+
+// A directory name is not prompt text, and a filesystem will accept bytes in it
+// that end an escape sequence early.
+test("a name carrying an escape byte cannot break out of the title", () => {
+  const evil = "evil" + ESC + "]0;pwned" + BEL + "repo";
+  const out = buildEscapes(COLORS, evil, true, { WT_SESSION: "1" });
+  assert.strictEqual(out.split(ESC + "]0;").length - 1, 1, "exactly one title escape leaves the builder");
+  assert.ok(out.includes(ESC + "]0;evil ]0;pwned repo" + BEL), "the control bytes go, the text stays");
+});
+
 test("the restore reaches the terminal, because it changes the delivery signature", () => {
   const WT = { WT_SESSION: "1" };
   assert.notStrictEqual(buildEscapes(COLORS, "", true, WT),
@@ -94,18 +112,34 @@ test("the restore reaches the terminal, because it changes the delivery signatur
 });
 
 // No terminal marker, so mark() never spawns the adapter at a real window.
-function markIn(cwd, sessionId, stateHome) {
+function markIn(cwd, sessionId, stateHome, gitTimeoutMs) {
   const env = { LOCALAPPDATA: stateHome, XDG_STATE_HOME: stateHome };
   const saved = [process.env.LOCALAPPDATA, process.env.XDG_STATE_HOME];
   process.env.LOCALAPPDATA = stateHome;
   process.env.XDG_STATE_HOME = stateHome;
   try {
-    return mark({ cwd, sessionId, eventName: "prompt", env, redeliverVt: false }).escapes;
+    return mark({ cwd, sessionId, eventName: "prompt", env, redeliverVt: false, gitTimeoutMs }).escapes;
   } finally {
     process.env.LOCALAPPDATA = saved[0];
     process.env.XDG_STATE_HOME = saved[1];
   }
 }
+
+// The restore made a silent git expensive: it repainted the window default.
+test("a git that does not answer in time leaves the window alone", () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-slow-"));
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "aura-slow-repo-"));
+  execFileSync("git", ["-C", repo, "init", "--initial-branch", "main"], { stdio: "ignore" });
+  try {
+    assert.ok(markIn(repo, "slowgit", stateHome).includes(ESC + "]11;"), "the repo prompt colors");
+    assert.strictEqual(markIn(repo, "slowgit", stateHome, 1), "", "silence sends nothing at all");
+    assert.ok(markIn(repo, "slowgit", stateHome).includes(ESC + "]11;"), "and costs it no color");
+  } finally {
+    [stateHome, repo].forEach(function (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+  }
+});
 
 test("a session that walks out of a repo hands the terminal back exactly once", () => {
   const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-back-"));

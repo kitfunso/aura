@@ -40,6 +40,8 @@ Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane 
 
 ## Common Mistakes to Avoid
 - Treating a non-zero git exit as "not a repo" - `git rev-parse --show-toplevel --abbrev-ref HEAD` exits 128 on a repo with no commits yet and still prints the toplevel. Read the output, not the exit code. Since no repo now means no color, this made every commitless repo lose its color entirely.
+- Reading a git that never answered as a git that said no - the probe returned the same `null` for exit 128 and for a spawn killed at its 1500 ms deadline, so a slow box read as "this window left its repo" and the restore flashed it back to the terminal default. A real answer always carries a numeric `status`; only a killed spawn is silence, and silence means decide nothing this prompt.
+- Sanitizing one input instead of the boundary - `sanitizeForTitle` ran on prompt text only, so `identity.name` (a directory basename) reached the `OSC 0` sequence raw. A filesystem accepts a BEL byte in a directory name, so `cd` into one and aura's own title escape ends early and whatever follows executes as an escape aura sent. Strip control bytes where text ENTERS an escape (`buildEscapes`), never per caller.
 - Writing escapes to stdout in a hook (see rule 3) - it silently does nothing visible and injects garbage context.
 - Trusting a successful CONOUT$ write from a hook as proof of visible delivery - Windows hooks own a hidden console, so the write "succeeds" invisibly. Visible proof is pixels (screenshot) or the AttachConsole path.
 - Attaching to the NEAREST console ancestor - the hook's own node/cmd parents hold the hidden console too. Attach topmost-first; GUI ancestors refuse and are skipped.

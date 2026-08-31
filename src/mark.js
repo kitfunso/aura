@@ -35,6 +35,8 @@ function restoreEscapes(env) {
   if (env.WT_SESSION) {
     out += `${ESC}]104;${TAB_COLOR_SLOT}${BEL}`;
     out += `${ESC}]104;${LEGACY_TAB_SLOT}${BEL}`;
+  } else if (env.TERM_PROGRAM === "iTerm.app") {
+    out += `${ESC}]6;1;bg;*;default${BEL}`;
   }
   return out;
 }
@@ -42,7 +44,10 @@ function restoreEscapes(env) {
 // wasColored is the previous run's answer: aura restores only what it set, so a
 // terminal it never touched keeps whatever colors the user configured.
 function buildEscapes(colors, title, usesColor, env, wasColored) {
-  const titleEscape = title ? `${ESC}]0;${title}${BEL}` : "";
+  // Sanitizing here, not per input: this is the only place text enters an
+  // escape, so a directory named with a BEL byte cannot end the sequence early.
+  const safe = sanitizeForTitle(title);
+  const titleEscape = safe ? `${ESC}]0;${safe}${BEL}` : "";
   if (!usesColor) return (wasColored ? restoreEscapes(env) : "") + titleEscape;
   // Clearing the old slot on the way past is what repairs an already-wrong tab.
   let out = env.WT_SESSION ? `${ESC}]104;${LEGACY_TAB_SLOT}${BEL}` : "";
@@ -130,7 +135,7 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, mode, env) {
 // caller's console is hidden, so the adapter repeats them into the real one.
 function mark({
   cwd, sessionId, eventName, promptText, env = process.env,
-  sink = () => null, redeliverVt = true,
+  sink = () => null, redeliverVt = true, gitTimeoutMs,
 }) {
   // Only a snapshot for identity and the decision; nothing here reaches disk.
   const state = readState() || { sessions: {} };
@@ -140,7 +145,9 @@ function mark({
   const session = state.sessions[sessionId] || {};
   // A tag is an explicit answer, so a tagged session never reads its tab name.
   const windowName = pinned ? null : session.windowName || null;
-  let identity = resolveIdentity(pinned || cwd, state, eventName === "SessionStart", windowName);
+  let identity = resolveIdentity(pinned || cwd, state, eventName === "SessionStart", windowName, gitTimeoutMs);
+  // git said nothing, so this prompt says nothing: no escapes, no paint, no write.
+  if (identity.unresolved) return { identity, colors: null, escapes: "", hwnd: session.hwnd || null };
   if (!identity.hasColor && !pinned && session.windowName === undefined && isPromptEvent(eventName)) {
     const found = usableWindowTitle(queryWindowTitle(env, session.hwnd));
     const settled = settleWindowName(session.windowProbe, found);

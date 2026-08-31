@@ -92,6 +92,39 @@ test("a repo that gains an origin picks it up at session start", () => {
   }
 });
 
+// The old probe returned the same null for "git said no" and "git never spoke".
+test("a git that never answers is told apart from a git that says no", () => {
+  const dir = makeDir();
+  const plain = makeDir();
+  try {
+    git(dir, ["init"]);
+    assert.strictEqual(resolveIdentity(dir, {}, false, null, 1).unresolved, true);
+    assert.strictEqual(resolveIdentity(dir, {}, false).isRepo, true);
+    const answered = resolveIdentity(plain, {}, false);
+    assert.strictEqual(answered.unresolved, undefined, "128 is an answer, not a silence");
+    assert.strictEqual(answered.isRepo, false);
+  } finally {
+    [dir, plain].forEach(function (d) { fs.rmSync(d, { recursive: true, force: true }); });
+  }
+});
+
+// The discrimination cuts the other way too: no git at all is still an answer.
+test("a box with no git colors by tab name instead of going silent", () => {
+  const dir = makeDir();
+  const savedPath = process.env.PATH;
+  try {
+    git(dir, ["init"]);
+    process.env.PATH = "";
+    const id = resolveIdentity(dir, {}, false, "some tab");
+    assert.strictEqual(id.unresolved, undefined, "ENOENT is an answer, not a silence");
+    assert.strictEqual(id.hasColor, true, "the tab name still names the window");
+    assert.strictEqual(id.repoId, "window:some tab");
+  } finally {
+    process.env.PATH = savedPath;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a detached HEAD is a repo with no branch", () => {
   const dir = makeDir();
   try {

@@ -9,6 +9,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
+const { restoreThisTerminal } = require("../src/install.js");
+const { restoreEscapes } = require("../src/mark.js");
+
 const CLI = path.join(__dirname, "..", "bin", "aura.js");
 
 function runInstaller(args, allowFailure) {
@@ -174,4 +177,16 @@ test("bash and zsh get the posix snippet, and an unknown shell exits 1", () => {
     assert.ok(fs.readFileSync(file, "utf8").includes("aura_mark_cwd"));
     assert.strictEqual(runInstaller(["--shell", "fish", "--profile", file], true), 1);
   });
+});
+
+// Rule 11 at the uninstall seam: the bytes handed to the terminal are the same
+// undo the prompt path builds, and a write that fails still lets uninstall pass.
+test("uninstall gives the terminal back exactly what the restore builds", () => {
+  const written = [];
+  restoreThisTerminal(function (text) { written.push(text); });
+  assert.deepStrictEqual(written, [restoreEscapes(process.env)]);
+  assert.ok(written[0].indexOf("]111") !== -1, "the background is in it");
+  assert.doesNotThrow(function () {
+    restoreThisTerminal(function () { throw new Error("no terminal here"); });
+  }, "an uninstall with no terminal to write to still succeeds");
 });
