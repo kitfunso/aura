@@ -7,13 +7,13 @@ const path = require("path");
 function identityFrom({ gitCombined, remoteUrl, cwd }) {
   if (!gitCombined) {
     const normalized = path.resolve(cwd);
-    return { repoId: normalized, branch: null, name: path.basename(normalized), isRepo: false };
+    return { repoId: normalized, branch: null, name: path.basename(normalized), isRepo: false, root: null };
   }
   const lines = gitCombined.split(/\r?\n/);
   const root = lines[0];
   // "HEAD" means unborn (no commits yet) or detached: a repo, with no branch.
   const branch = lines[1] && lines[1] !== "HEAD" ? lines[1] : null;
-  return { repoId: remoteUrl || root, branch, name: path.basename(root), isRepo: true };
+  return { repoId: remoteUrl || root, branch, name: path.basename(root), isRepo: true, root };
 }
 
 // Proof the session runs in a terminal the user launched; headless runs set none.

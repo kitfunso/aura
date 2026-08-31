@@ -9,6 +9,8 @@ const STALE_MS = 48 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5000;
 const LOCK_WAIT_MS = 200;
 const LOCK_SLICE_MS = 5;
+const RENAME_WAIT_MS = 250;
+const RENAME_SLICE_MS = 5;
 
 function stateDir() {
   if (process.platform === "win32") {
@@ -23,12 +25,14 @@ function stateFile() {
   return path.join(stateDir(), "state.json");
 }
 
+// null means "there is state here but it would not read", which is not the same
+// as no state: writing an empty file back would delete every other window.
 function readState() {
   try {
     const parsed = JSON.parse(fs.readFileSync(stateFile(), "utf8"));
     if (parsed && typeof parsed === "object" && parsed.sessions) return parsed;
   } catch (err) {
-    // missing or corrupt file: start fresh
+    if (err.code && err.code !== "ENOENT") return null;
   }
   return { sessions: {} };
 }
@@ -36,9 +40,24 @@ function readState() {
 function writeState(state) {
   const file = stateFile();
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + ".tmp";
+  // Per-process temp name, so two writers can never share one.
+  const temp = file + "." + process.pid + ".tmp";
   fs.writeFileSync(temp, JSON.stringify(state, null, 2));
-  fs.renameSync(temp, file);
+  // Windows refuses the rename while a reader holds the destination open, and
+  // allows it the moment that reader closes (measured), so wait the reader out.
+  const deadline = Date.now() + RENAME_WAIT_MS;
+  for (;;) {
+    try {
+      fs.renameSync(temp, file);
+      return;
+    } catch (err) {
+      if (Date.now() >= deadline) {
+        try { fs.unlinkSync(temp); } catch (cleanupErr) { /* nothing left to do */ }
+        throw err;
+      }
+      sleep(RENAME_SLICE_MS);
+    }
+  }
 }
 
 function pruneStale(state, now = Date.now()) {
@@ -76,8 +95,9 @@ function acquireLock() {
       try {
         if (Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS) fs.unlinkSync(lock);
       } catch (staleErr) { /* another waiter took it first */ }
-      // Rule 6: stalling a prompt is worse than a rare lost update.
-      if (Date.now() >= deadline) return function () { };
+      // Rule 6: never stall a prompt. Giving up writes NOTHING, because an
+      // unsynchronized write is the loss the lock exists to prevent.
+      if (Date.now() >= deadline) return null;
       sleep(LOCK_SLICE_MS);
     }
   }
@@ -87,11 +107,14 @@ function acquireLock() {
 // between the read and here, and every shell prompt is a competing writer.
 function updateState(mutate) {
   const release = acquireLock();
+  if (!release) return false;
   try {
     const state = readState();
+    if (!state) return false;
     mutate(state);
     pruneStale(state);
     writeState(state);
+    return true;
   } finally {
     release();
   }

@@ -54,6 +54,44 @@ test("a plain folder is not a repo", () => {
   }
 });
 
+// Changing origin on disk is what proves the cache: a second spawn would see
+// the new URL, a cache hit keeps the old one.
+test("a cached remote is reused, and rechecked only at session start", () => {
+  const dir = makeDir();
+  try {
+    git(dir, ["init"]);
+    git(dir, ["remote", "add", "origin", "https://example.com/first.git"]);
+    const state = {};
+    const first = resolveIdentity(dir, state, false);
+    assert.strictEqual(first.repoId, "https://example.com/first.git");
+    assert.strictEqual(state.remotes[first.root], "https://example.com/first.git");
+    assert.strictEqual(first.remoteUrl, "https://example.com/first.git");
+
+    git(dir, ["remote", "set-url", "origin", "https://example.com/second.git"]);
+    assert.strictEqual(resolveIdentity(dir, state, false).repoId, "https://example.com/first.git");
+    assert.strictEqual(resolveIdentity(dir, state, true).repoId, "https://example.com/first.git");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a repo that gains an origin picks it up at session start", () => {
+  const dir = makeDir();
+  try {
+    git(dir, ["init"]);
+    const state = {};
+    const before = resolveIdentity(dir, state, false);
+    assert.strictEqual(before.remoteUrl, null);
+    assert.strictEqual(state.remotes[before.root], null);
+
+    git(dir, ["remote", "add", "origin", "https://example.com/late.git"]);
+    assert.strictEqual(resolveIdentity(dir, state, false).repoId, before.root);
+    assert.strictEqual(resolveIdentity(dir, state, true).repoId, "https://example.com/late.git");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a detached HEAD is a repo with no branch", () => {
   const dir = makeDir();
   try {

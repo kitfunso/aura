@@ -90,7 +90,8 @@ function mark({
   cwd, sessionId, eventName, promptText, env = process.env,
   sink = () => null, redeliverVt = true,
 }) {
-  const state = readState();
+  // Only a snapshot for identity and the decision; nothing here reaches disk.
+  const state = readState() || { sessions: {} };
   const identity = resolveIdentity(cwd, state, eventName === "SessionStart");
   const colors = colorsFor({ repoId: identity.repoId, branch: identity.branch });
 
@@ -150,6 +151,7 @@ function mark({
   // to concurrent shells, so the delta goes onto a fresh read under a lock.
   updateState(function (fresh) {
     fresh.sessions[sessionId] = session;
+    if (identity.root) (fresh.remotes || (fresh.remotes = {}))[identity.root] = identity.remoteUrl;
     // Ownership is keyed by HWND, because tabs share one frame.
     if (session.hwnd && process.platform === "win32") {
       const freshOwners = fresh.frameOwner || (fresh.frameOwner = {});

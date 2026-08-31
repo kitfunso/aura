@@ -31,7 +31,9 @@ function resolveIdentity(cwd, state, recheckNullRemote) {
     }
     remoteUrl = remotes[root];
   }
-  return identityFrom({ gitCombined: combined, remoteUrl, cwd });
+  // The caller persists remoteUrl under root: without it every prompt pays a
+  // second git spawn to re-learn the same URL.
+  return Object.assign(identityFrom({ gitCombined: combined, remoteUrl, cwd }), { remoteUrl });
 }
 
 module.exports = { runGit, resolveIdentity };

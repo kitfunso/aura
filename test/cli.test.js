@@ -103,6 +103,25 @@ test("--write prints nothing, or the same escapes when no terminal device answer
   }
 });
 
+// The delta write carries only what it names, and dropping this one costs a
+// second git spawn on every prompt.
+test("the remote cache survives the delta write", () => {
+  const dir = makeRepo("main");
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-remotes-"));
+  const env = Object.assign({}, process.env, { LOCALAPPDATA: stateHome, XDG_STATE_HOME: stateHome });
+  delete env.WT_SESSION;
+  delete env.TERM_PROGRAM;
+  try {
+    execFileSync("git", ["-C", dir, "remote", "add", "origin", "https://example.com/cached.git"], { stdio: "ignore" });
+    execFileSync(process.execPath, [CLI, "mark", "--cwd", dir, "--session", "remote-cache"], { env });
+    const state = JSON.parse(fs.readFileSync(path.join(stateHome, "aura", "state.json"), "utf8"));
+    assert.deepStrictEqual(Object.values(state.remotes || {}), ["https://example.com/cached.git"]);
+  } finally {
+    fs.rmSync(stateHome, { recursive: true, force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("shell-init emits a runnable snippet with the CLI path filled in", () => {
   for (const shell of ["powershell", "bash", "zsh"]) {
     const out = execFileSync(process.execPath, [CLI, "shell-init", "--shell", shell]).toString();

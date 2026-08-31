@@ -44,6 +44,121 @@ test("concurrent writers all survive", async () => {
   }
 });
 
+test("a rename the OS refuses is retried, not lost", () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-eperm-"));
+  const prevLocal = process.env.LOCALAPPDATA;
+  const prevXdg = process.env.XDG_STATE_HOME;
+  process.env.LOCALAPPDATA = stateHome;
+  process.env.XDG_STATE_HOME = stateHome;
+  const realRename = fs.renameSync;
+  // Stands in for a reader whose handle stays open far longer than a whole
+  // prompt turn, which is the case a fixed attempt count gets wrong.
+  const HELD_MS = 120;
+  const releaseAt = Date.now() + HELD_MS;
+  let refusals = 0;
+  fs.renameSync = function (from, to) {
+    if (Date.now() < releaseAt) {
+      refusals++;
+      const err = new Error("EPERM: operation not permitted, rename '" + from + "' -> '" + to + "'");
+      err.code = "EPERM";
+      throw err;
+    }
+    return realRename(from, to);
+  };
+  try {
+    const { writeState, stateFile } = require("../src/state.js");
+    const started = Date.now();
+    writeState({ sessions: { "survived-eperm": { updatedAt: new Date().toISOString() } } });
+    assert.ok(JSON.parse(fs.readFileSync(stateFile(), "utf8")).sessions["survived-eperm"]);
+    assert.ok(refusals > 1, "the rename really was refused, repeatedly");
+    assert.ok(Date.now() - started >= HELD_MS, "it waited the reader out instead of giving up");
+    const leftovers = fs.readdirSync(path.dirname(stateFile())).filter(function (name) { return name.endsWith(".tmp"); });
+    assert.deepStrictEqual(leftovers, [], "no temp file was left behind");
+  } finally {
+    fs.renameSync = realRename;
+    if (prevLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prevLocal;
+    if (prevXdg === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prevXdg;
+    fs.rmSync(stateHome, { recursive: true, force: true });
+  }
+});
+
+test("a state file that will not read is left alone, not emptied", () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-unread-"));
+  const prevLocal = process.env.LOCALAPPDATA;
+  const prevXdg = process.env.XDG_STATE_HOME;
+  process.env.LOCALAPPDATA = stateHome;
+  process.env.XDG_STATE_HOME = stateHome;
+  const realRead = fs.readFileSync;
+  try {
+    const { updateState, writeState, stateFile } = require("../src/state.js");
+    writeState({ sessions: { "another-window": { updatedAt: new Date().toISOString() } } });
+    const before = realRead(stateFile(), "utf8");
+
+    fs.readFileSync = function (file, options) {
+      if (String(file) === stateFile()) {
+        const err = new Error("EBUSY: resource busy or locked, read");
+        err.code = "EBUSY";
+        throw err;
+      }
+      return realRead(file, options);
+    };
+    const wrote = updateState(function (state) { state.sessions["would-clobber"] = {}; });
+
+    fs.readFileSync = realRead;
+    assert.strictEqual(wrote, false, "the caller is told the delta did not land");
+    assert.strictEqual(fs.readFileSync(stateFile(), "utf8"), before, "the other window survived");
+  } finally {
+    fs.readFileSync = realRead;
+    if (prevLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prevLocal;
+    if (prevXdg === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prevXdg;
+    fs.rmSync(stateHome, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt state file self-heals instead of wedging", () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-corrupt-"));
+  const prevLocal = process.env.LOCALAPPDATA;
+  const prevXdg = process.env.XDG_STATE_HOME;
+  process.env.LOCALAPPDATA = stateHome;
+  process.env.XDG_STATE_HOME = stateHome;
+  try {
+    const { updateState, stateFile } = require("../src/state.js");
+    fs.mkdirSync(path.dirname(stateFile()), { recursive: true });
+    fs.writeFileSync(stateFile(), "{ not json at all");
+    const wrote = updateState(function (state) { state.sessions["after-corruption"] = { updatedAt: new Date().toISOString() }; });
+    assert.strictEqual(wrote, true);
+    assert.ok(JSON.parse(fs.readFileSync(stateFile(), "utf8")).sessions["after-corruption"]);
+  } finally {
+    if (prevLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prevLocal;
+    if (prevXdg === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prevXdg;
+    fs.rmSync(stateHome, { recursive: true, force: true });
+  }
+});
+
+test("a lock held by a live writer makes us give up, not write unsynchronized", () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-busy-"));
+  const prevLocal = process.env.LOCALAPPDATA;
+  const prevXdg = process.env.XDG_STATE_HOME;
+  process.env.LOCALAPPDATA = stateHome;
+  process.env.XDG_STATE_HOME = stateHome;
+  try {
+    const { updateState, stateFile } = require("../src/state.js");
+    const lock = stateFile() + ".lock";
+    fs.mkdirSync(path.dirname(lock), { recursive: true });
+    fs.writeFileSync(lock, "");
+
+    const started = Date.now();
+    const wrote = updateState(function (state) { state.sessions["never-lands"] = { updatedAt: new Date().toISOString() }; });
+    assert.strictEqual(wrote, false, "the caller is told the delta did not land");
+    assert.ok(!fs.existsSync(stateFile()), "nothing was written outside the lock");
+    assert.ok(Date.now() - started < 1000, "the prompt was not stalled");
+  } finally {
+    if (prevLocal === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prevLocal;
+    if (prevXdg === undefined) delete process.env.XDG_STATE_HOME; else process.env.XDG_STATE_HOME = prevXdg;
+    fs.rmSync(stateHome, { recursive: true, force: true });
+  }
+});
+
 test("a lock left by a dead process is taken, not waited on forever", () => {
   const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lock-"));
   const prevLocal = process.env.LOCALAPPDATA;
