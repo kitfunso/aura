@@ -92,7 +92,10 @@ function mark({
 }) {
   // Only a snapshot for identity and the decision; nothing here reaches disk.
   const state = readState() || { sessions: {} };
-  const identity = resolveIdentity(cwd, state, eventName === "SessionStart");
+  // A tag outranks cwd, which carries no project when an agent was launched
+  // from a home folder.
+  const pinned = (state.tags || {})[sessionId];
+  const identity = resolveIdentity(pinned || cwd, state, eventName === "SessionStart");
   const colors = colorsFor({ repoId: identity.repoId, branch: identity.branch });
 
   const titleParts = [identity.name];

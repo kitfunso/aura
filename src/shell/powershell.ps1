@@ -4,8 +4,14 @@ $global:AuraCli = "__AURA_CLI__"
 
 # Start second, because Windows recycles pids well inside the 48h state window.
 if (-not $global:AuraSession) {
-    $global:AuraSession = "shell-" + $PID + "-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    if ($env:AURA_SESSION) {
+        $global:AuraSession = $env:AURA_SESSION
+    } else {
+        $global:AuraSession = "shell-" + $PID + "-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    }
 }
+# Exported so an agent started here tags the window's own session, not its pid.
+$env:AURA_SESSION = $global:AuraSession
 
 # Re-wrap when something else took the prompt; a plain re-source is a no-op.
 if ($null -eq $function:prompt -or $function:prompt.ToString() -notmatch 'aura-prompt') {

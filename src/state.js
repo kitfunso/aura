@@ -67,6 +67,10 @@ function pruneStale(state, now = Date.now()) {
       delete state.sessions[id];
     }
   }
+  // A tag outlives nothing: its session is the only thing that gives it meaning.
+  for (const id of Object.keys(state.tags || {})) {
+    if (!state.sessions[id]) delete state.tags[id];
+  }
   const trackedHwnds = new Set();
   for (const session of Object.values(state.sessions)) {
     if (session.hwnd) trackedHwnds.add(String(session.hwnd));

@@ -86,3 +86,33 @@ test("the posix snippet parses under bash", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// The tag verb keys off this variable, so a shell that does not export it
+// leaves every non-Claude agent tagging a pid nobody else writes to.
+test("the powershell snippet exports its session key to child processes",
+  { skip: process.platform !== "win32" }, () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-env-"));
+    try {
+      const snippet = snippetFor("powershell", dir).split(path.sep).join("/");
+      const out = execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass",
+        "-Command", ". '" + snippet + "'; $env:AURA_SESSION"]).toString().trim();
+      assert.match(out, /^shell-\d+-\d+$/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+test("the posix snippet exports its session key to child processes", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-env-sh-"));
+  try {
+    const script = '. "$1"; "$2" -e "process.stdout.write(String(process.env.AURA_SESSION||0))"';
+    const out = execFileSync("bash", ["-c", script, "bash", snippetFor("bash", dir), process.execPath])
+      .toString().trim();
+    assert.match(out, /^shell-\d+-\d+$/);
+  } catch (err) {
+    if (err.code === "ENOENT") return;
+    throw err;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

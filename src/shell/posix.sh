@@ -6,6 +6,8 @@ AURA_CLI="__AURA_CLI__"
 if [ -z "$AURA_SESSION" ]; then
   AURA_SESSION="shell-$$-$(date +%s)"
 fi
+# Exported so an agent started here tags the window's own session, not its pid.
+export AURA_SESSION
 AURA_LAST_PATH=""
 
 aura_mark_cwd() {

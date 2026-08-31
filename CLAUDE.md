@@ -4,7 +4,7 @@
 aura color-codes terminal windows on Windows 11 by the repo they sit in: repo = hue, branch = shade, latest prompt in the window title. Any shell in a repo gets it, whatever agent runs inside. It is shell prompts + hooks + OS APIs only. Docs: `docs/PRD.md` (scope), `docs/ARCHITECTURE.md` (design).
 
 ## Architecture
-Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/mark.js` (THE core every caller goes through), `src/decide.js` (pure decision core), `src/git.js` (the only git spawns), `src/hook.js` and `bin/aura.js` (the callers: Claude Code hook, and the CLI a shell prompt runs), `src/shell/` (the prompt snippets), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
+Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/mark.js` (THE core every caller goes through), `src/decide.js` (pure decision core), `src/git.js` (the only git spawns), `src/tag.js` (the second identity source, which outranks cwd), `src/hook.js` and `bin/aura.js` (the callers: Claude Code hook, and the CLI a shell prompt runs), `src/shell/` (the prompt snippets), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
 
 ## Non-Negotiable Rules
 1. **Never fork, patch, or wrap the Claude Code binary.** Hooks and OS APIs only. Why: survives every Claude Code update.
@@ -55,3 +55,6 @@ Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane 
 - Dropping part of the delta - `mark()` mutates sessions, frameOwner AND the `remotes` cache, so a delta that carries two of the three quietly costs a second git spawn on every prompt (rule 5).
 - Using a bare pid as a shell session id - Windows recycles pids well inside the 48 h prune window, and the recycled shell inherits the dead one's cached HWND. The snippets append a start second.
 - Replacing `prompt` in a shell profile - posh-git, oh-my-posh and Starship own it. Capture and call the existing one, and tag the wrapper so a re-source does not wrap twice.
+- Treating the working directory as the identity - agents are launched from home folders, and six tabs on six projects then share one path that names no project. Identity has two sources now: `state.tags` first, cwd second.
+- Writing a tag without touching its session entry - `pruneStale` deletes any tag whose session is gone, so the write that sets a tag for a not-yet-seen session would drop it again inside the same lock.
+- Minting a shell session key without exporting it - a tag set from inside an agent keys off `AURA_SESSION`, so a shell that keeps it as a shell variable leaves every non-Claude agent tagging a `shell-<ppid>` nothing else writes to.

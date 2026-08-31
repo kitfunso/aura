@@ -49,6 +49,24 @@ terminal's own default.
 So a color means the window is in that repo. It does not mean an agent is
 running in it, and that is the trade for one mechanism every tool gets for free.
 
+## When the folder is not the project
+
+Agents get launched from a home folder as often as from a checkout, and a home
+folder names no project. So identity has a second source. A tag pins one
+session to a repo, and the tag outranks the working directory:
+
+```
+aura tag ~/hippo      # this session is hippo, wherever it sits
+aura tag              # print the current tag
+aura tag --clear      # back to the working directory
+```
+
+Run it from inside an agent and it tags that agent's own session. The key comes
+from `CLAUDE_CODE_SESSION_ID`, or from `AURA_SESSION`, which the shell snippet
+exports to every process the window starts. The color lands on the next prompt,
+because that is the next moment something with a visible console runs. A tag
+lives and dies with its session, so nothing outlives the window that set it.
+
 ## Install
 
 ```
@@ -119,7 +137,8 @@ PowerShell hop for them. The frame paint still spawns the adapter, once per
 window and color.
 
 Repo layout: `src/color.js` (the pure color contract), `src/mark.js` (the core
-every caller goes through), `src/hook.js` and `bin/aura.js` (the two callers),
+every caller goes through), `src/tag.js` (the session tag), `src/hook.js` and
+`bin/aura.js` (the two callers),
 `src/shell/` (the prompt snippets), `src/tty.js` (terminal device),
 `src/adapters/frame-win.ps1` (all Win32 code), `src/install.js` (installer).
 Tests, from the repo root:
