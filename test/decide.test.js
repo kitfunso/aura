@@ -252,6 +252,8 @@ test("usableWindowTitle: takes a real tab name, refuses everything else", () => 
   assert.strictEqual(usableWindowTitle(undefined), null);
   assert.strictEqual(usableWindowTitle("x".repeat(41)), null, "prompt text is not a name");
   assert.strictEqual(usableWindowTitle("aura · master"), null, "aura's own title never feeds back");
+  assert.strictEqual(usableWindowTitle("✳ fix the thing"), null, "an agent status line is not a name");
+  assert.strictEqual(usableWindowTitle("✳ continue"), null, "a short repeated prompt would otherwise settle");
   assert.strictEqual(usableWindowTitle("C:" + String.fromCharCode(92) + "Users"), null, "a path is not a name");
   assert.strictEqual(usableWindowTitle("~/hippo"), null, "a path is not a name");
   assert.strictEqual(usableWindowTitle("Windows PowerShell"), null, "a shell default names no project");

@@ -11,10 +11,14 @@ const DEFAULT_TITLES = [
   "windows powershell", "powershell", "pwsh", "command prompt", "cmd", "cmd.exe",
   "windows terminal", "git bash", "bash", "sh", "zsh", "node", "ubuntu", "wsl",
 ];
+// An agent prefixes its title with one of these. A name never carries one, and
+// a repeated short prompt would otherwise settle a status line into an identity.
+const STATUS_MARKERS = ["·", "✳", "✴", "✶", "✹"];
 
 function usableWindowTitle(raw) {
   const name = String(raw == null ? "" : raw).replace(/[\u0000-\u001f]+/g, " ").trim();
-  if (!name || name.length > MAX_WINDOW_NAME || name.indexOf("\u00b7") !== -1) return null;
+  if (!name || name.length > MAX_WINDOW_NAME) return null;
+  if (STATUS_MARKERS.some(function (m) { return name.indexOf(m) !== -1; })) return null;
   // A separator or a drive colon means a shell wrote the path in; a name has neither.
   if (name.indexOf("/") !== -1 || name.indexOf(":") !== -1) return null;
   return DEFAULT_TITLES.indexOf(name.toLowerCase()) === -1 ? name : null;

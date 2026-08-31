@@ -61,9 +61,10 @@ names none of them. So identity has two more sources.
 **Your tab name.** Rename a Windows Terminal tab and aura colors it by that
 name, deterministically, the same way it colors a repo. Nothing to run. Tabs you
 have not renamed are left alone, because aura only takes a title that behaves
-like a name: under 40 characters, no path in it, not a shell's own default, and
-unchanged across two prompts. An agent's title moves with every prompt, so it
-never qualifies. A session colored by its tab name keeps that name, because
+like a name: under 40 characters, no path in it, not a shell's own default, no
+agent status marker, and unchanged across two prompts. An agent's title carries
+a marker and moves with every prompt, so it never qualifies. A session colored
+by its tab name keeps that name, because
 writing a new title would change the color it was just read from.
 
 **A tag**, when you want a session to wear a specific repo's color:
