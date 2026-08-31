@@ -1,20 +1,22 @@
 # CLAUDE.md - aura
 
 ## Project Overview
-aura color-codes Claude Code terminal windows on Windows 11: repo = hue, branch = shade, latest prompt in the window title. It is hooks + OS APIs only. Docs: `docs/PRD.md` (scope), `docs/ARCHITECTURE.md` (design).
+aura color-codes terminal windows on Windows 11 by the repo they sit in: repo = hue, branch = shade, latest prompt in the window title. Any shell in a repo gets it, whatever agent runs inside. It is shell prompts + hooks + OS APIs only. Docs: `docs/PRD.md` (scope), `docs/ARCHITECTURE.md` (design).
 
 ## Architecture
-Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/decide.js` (pure decision core), `src/git.js` (the only git spawns), `src/hook.js` (Claude Code hook integration), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
+Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane B inherits), `src/mark.js` (THE core every caller goes through), `src/decide.js` (pure decision core), `src/git.js` (the only git spawns), `src/hook.js` and `bin/aura.js` (the callers: Claude Code hook, and the CLI a shell prompt runs), `src/shell/` (the prompt snippets), `src/tty.js` (terminal device access, per-OS paths), `src/adapters/` (ALL OS-specific window code; `frame-win.ps1` in v0). See ARCHITECTURE.md before touching any of them.
 
 ## Non-Negotiable Rules
 1. **Never fork, patch, or wrap the Claude Code binary.** Hooks and OS APIs only. Why: survives every Claude Code update.
 2. **`color.js` stays pure and dependency-free.** No I/O, no Win32, no requires beyond node builtins. Why: Lane B (cross-app overlay) must be able to lift it unchanged.
-3. **Hook escapes go to the tty device via `src/tty.js` (`CONOUT$` on Windows, `/dev/tty` on POSIX), never stdout.** Why: Claude Code captures hook stdout as model context; escapes on stdout would pollute the session instead of reaching the terminal. On Windows the direct write lands in the hook's own HIDDEN console (measured 2026-08-30: write succeeds, nothing visible); the VISIBLE delivery is the AttachConsole payload inside `frame-win.ps1`, riding the once-per-color spawn. Never "fix" invisible escapes by writing to stdout.
-4. **The installer merges `~/.claude/settings.json` and backs it up first. It never overwrites.** Why: that file carries the user's whole hook/permission config; destroying it is the worst failure this tool can have.
-5. **Hook runtime budget: keep the steady-state path at ~70 ms (measured median on this box; node startup ~60 ms dominates, so 50 ms is not reachable with a node hook).** Concretely: no network calls, no npm runtime dependencies, at most ONE git spawn, and no PowerShell spawn on the steady path (the DWM color persists and `vtHex` caches VT delivery; the adapter spawns at session start and on color change or undelivered VT - that spawn costs ~2 s with the delayed-writer handover, measured, and never rides a prompt turn). Why: aura must never make a Claude Code turn feel slower.
+3. **Hook escapes go to the tty device via `src/tty.js` (`CONOUT$` on Windows, `/dev/tty` on POSIX), never stdout.** This binds `src/hook.js`, not `bin/aura.js`: the CLI's caller is a shell that renders stdout, so printing there is correct for it. Why: Claude Code captures hook stdout as model context; escapes on stdout would pollute the session instead of reaching the terminal. On Windows the direct write lands in the hook's own HIDDEN console (measured 2026-08-30: write succeeds, nothing visible); the VISIBLE delivery is the AttachConsole payload inside `frame-win.ps1`, riding the once-per-color spawn. Never "fix" invisible escapes by writing to stdout.
+4. **The installer merges `~/.claude/settings.json` and shell profiles, backs each up first, and never overwrites.** Its profile block lives between two markers so a re-run replaces it instead of stacking, and `uninstall` removes exactly that block. Why: those files carry the user's whole hook config and their whole prompt; destroying either is the worst failure this tool can have.
+5. **Hook and prompt runtime budget: keep the steady-state path at ~70 ms (measured median on this box; node startup ~60 ms dominates, so 50 ms is not reachable with a node hook).** Concretely: no network calls, no npm runtime dependencies, at most ONE git spawn, and no PowerShell spawn on the steady path (the DWM color persists and `vtHex` caches VT delivery; the adapter spawns at session start and on color change or undelivered VT - that spawn costs ~2 s with the delayed-writer handover, measured, and never rides a prompt turn). Why: aura must never make a Claude Code turn feel slower.
 6. **Fail silent, degrade gracefully.** A hook that throws must still `exit 0`. Why: a broken aura must never block a prompt or break a session.
 7. **Color mapping changes are breaking changes.** Update PRD + ARCHITECTURE first, and keep determinism tests green. Why: stable colors ARE the product.
-8. **OS-specific code lives ONLY in `src/adapters/` and inside `src/tty.js`.** The core must run unchanged on macOS and Linux. A missing adapter degrades to tint + title, it never errors. Why: cross-platform is a core requirement, not a port.
+8. **OS-specific code lives ONLY in `src/adapters/`, `src/shell/` and inside `src/tty.js`.** The core must run unchanged on macOS and Linux. A missing adapter degrades to tint + title, it never errors. Why: cross-platform is a core requirement, not a port.
+9. **State writes are deltas applied to a fresh read under the lock, never a whole-file write of the snapshot you started with.** Every open shell is a writer now, and `mark()` can spend seconds in the adapter between its read and its write. Why: overwriting from a stale snapshot silently deletes other windows' entries, and a lost HWND cache repaints the wrong window.
+10. **A caller decides where bytes go; `src/mark.js` does not.** Sink and environment are arguments to `mark()`. Why: one core with a branch per caller inside it is how this grows back into three copies of the same logic.
 
 ## Coding Conventions
 - Plain Node.js, zero runtime dependencies, `node --test` for tests.
@@ -25,7 +27,9 @@ Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane 
 
 ## Critical Files
 - `src/color.js` - read the Color Contract section of ARCHITECTURE.md before editing.
-- `bin/install.js` - read Non-Negotiable rule 4 before editing.
+- `src/mark.js` - the core. Read Non-Negotiable rules 9 and 10 before editing.
+- `src/install.js` - read Non-Negotiable rule 4 before editing.
+- `src/shell/*.ps1`, `src/shell/*.sh` - these land in a user's profile. A syntax error here breaks their shell, so `test/shell.test.js` parses both with the real shell.
 - `~/.claude/settings.json` (user machine) - never edited by hand in this repo; only via the installer.
 
 ## Safety Rules
@@ -44,3 +48,10 @@ Parts with hard boundaries: `src/color.js` (pure color math - THE contract Lane 
 - Identifying the window by PID ancestry (WT runs many windows in ONE process - measured) or by nonce title (Claude Code re-asserts the title faster than the window can be found - measured 2026-08-30). Use GetForegroundWindow at prompt time with the terminal-process allowlist.
 - Assuming the title we set persists - Claude Code rewrites the terminal title continuously (confirmed); title is re-asserted per prompt and is best-effort.
 - Spawning PowerShell on the per-prompt path - the DWM frame color persists on the window; repaint only when the color changed or no HWND is cached.
+- Caching `vtHex` only for repo sessions - off-repo it then stays unset, `needsVtDelivery` stays true, and a shell in a plain folder spawns PowerShell on EVERY prompt. Cache it whenever a caller with a visible console has already delivered the escapes.
+- Treating a failed READ of state.json as an empty state - on Windows a read can fail transiently while another process renames over the file, and persisting the resulting `{}` deletes every other window's entry. Only ENOENT means "no state"; any other IO error means "do not write". Unparseable content is the one case that may start fresh, or a corrupt file wedges aura forever.
+- Assuming `renameSync` cannot fail - Windows refuses it with EPERM for as long as any other process holds the destination open, and allows it the instant that reader closes (measured 2026-08-31). Every writer needs its own temp name and a deadline to wait the reader out.
+- Sizing a retry loop in attempts - the real sleep granularity on this box is ~15 ms, not the 5 ms asked for, so an attempt count silently becomes a 3x longer wall clock. Budget every wait as a deadline.
+- Dropping part of the delta - `mark()` mutates sessions, frameOwner AND the `remotes` cache, so a delta that carries two of the three quietly costs a second git spawn on every prompt (rule 5).
+- Using a bare pid as a shell session id - Windows recycles pids well inside the 48 h prune window, and the recycled shell inherits the dead one's cached HWND. The snippets append a start second.
+- Replacing `prompt` in a shell profile - posh-git, oh-my-posh and Starship own it. Capture and call the existing one, and tag the wrapper so a re-source does not wrap twice.

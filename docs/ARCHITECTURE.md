@@ -3,37 +3,62 @@
 ## System Overview
 
 ```
-Claude Code session (per window)
-  |
-  |  SessionStart / UserPromptSubmit hook events (JSON on stdin)
-  v
-+---------------------------+
-| src/hook.js  (Node)       |---- reads repo root + branch (git)
-|  - color.js: identity ->  |---- writes escapes to the console (CONOUT$)
-|    {hue, tint, frame}     |        OSC 11 = background tint (per tab)
-|  - title: repo·branch·    |        OSC 4 + DECAC = tab header color (per tab, WT 1.15+)
-|    latest prompt          |        OSC 0  = window/tab title
-|    latest prompt          |
-|  - state.json per session |
-+------------+--------------+
-             | spawns on first paint / color change (foreground handshake)
-             v
-+---------------------------+
-| adapters/frame-win.ps1    |---- GetForegroundWindow -> HWND (terminal allowlist)
-|  P/Invoke DwmSetWindow-   |---- DWMWA_BORDER_COLOR (34)
-|  Attribute on the HWND    |---- DWMWA_CAPTION_COLOR (35)
-+---------------------------+
+  shell prompt            Claude Code hook          any script
+  aura mark --write       SessionStart / prompt     aura mark --cwd <dir>
+        |                        |                        |
+        +------------------------+------------------------+
+                                 |
+                                 v
+              +---------------------------------+
+              | src/mark.js  (the core)         |-- git: repo root + branch
+              |  color.js  identity -> colors   |-- escapes: OSC 11 tint, OSC 4 +
+              |  decide.js what to do about it  |   DECAC tab color, OSC 0 title
+              |  state.js  per-session record   |-- sink: the caller's console, or
+              +----------------+----------------+   the tty device (CONOUT$, /dev/tty)
+                               | spawns on first paint or color change
+                               v
+              +---------------------------------+
+              | adapters/frame-win.ps1          |-- GetForegroundWindow -> HWND
+              |  P/Invoke DwmSetWindowAttribute |   (terminal-process allowlist)
+              |  on that one HWND               |-- BORDER_COLOR 34, CAPTION_COLOR 35
+              +---------------------------------+
 ```
+
+## Who calls the core
+
+Every caller answers one question: which directory is this window in now? The
+core does the rest, and none of it knows what is running in the window.
+
+| Caller | Fires on | Why it exists |
+|---|---|---|
+| Shell prompt (`aura mark --write`) | every prompt where `$PWD` changed | one integration covers every agent and a bare git shell |
+| Claude Code hook (`src/hook.js`) | SessionStart, UserPromptSubmit | colors a session at startup, before its first prompt |
+| Any script (`aura mark --cwd <dir>`) | whenever the caller says so | escape hatch for tools with their own events |
+
+The consequence, accepted 2026-08-31 (PRD "IS NOT" item 9): a color means the
+window is in that repo, not that an agent is working in it.
+
+Two differences follow from who owns the console:
+
+- **Escapes.** A shell prompt owns a visible console, so the CLI writes them
+  itself (`--write`, falling back to stdout) and no PowerShell hop is needed.
+  A Claude Code hook does not (see Known Risks), so its escapes ride the
+  adapter spawn. That is the `redeliverVt` flag on `mark()`: the hook sets it,
+  the CLI does not.
+- **Stdout.** The hook may never print (rule 3: Claude Code captures hook
+  stdout as model context). The CLI may, because its caller is a shell that
+  will render it.
 
 ## Tech Stack
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
-| Hook runtime | Node.js (plain JS, no deps) | Claude Code hooks are child processes; Node is already installed; zero-dependency keeps install trivial |
+| Core runtime | Node.js (plain JS, no deps) | hooks and shell prompts both spawn child processes; Node is already installed; zero-dependency keeps install trivial |
+| Shell integration | prompt-function snippets (PowerShell, bash, zsh) | the shell already knows its own directory; wrapping the existing prompt leaves posh-git / oh-my-posh / Starship working |
 | Frame painter | PowerShell 5.1 + Add-Type P/Invoke | Ships as text, no compiled exe, native on every Windows 11 box |
 | Terminal control | VT escape sequences (OSC 0, OSC 11) | Supported by Windows Terminal; no terminal API needed |
 | Window frame | dwmapi.dll DwmSetWindowAttribute | Only supported way to color another top-level window's border/caption on Win11 22000+ |
-| Install | npx bin script editing ~/.claude/settings.json | One command; merge + backup, never overwrite |
-| State | %LOCALAPPDATA%/aura/state.json | HWND cache + latest prompt per session id |
+| Install | npx bin script editing a shell profile and/or ~/.claude/settings.json | One command per target; merge + backup, never overwrite |
+| State | %LOCALAPPDATA%/aura/state.json | HWND cache + latest prompt per session id; concurrent shells write deltas under a lock file |
 
 ## Repository Structure
 ```
@@ -47,16 +72,22 @@ aura/
     plans/               # dated phase plans
   src/
     color.js             # THE COLOR CONTRACT (see below) - pure, no I/O
-    hook.js              # hook entry: reads stdin JSON, emits escapes, updates state
+    mark.js              # THE CORE every caller goes through: identity -> escapes -> paint -> state
+    hook.js              # caller: Claude Code hook, reads stdin JSON
     decide.js            # pure decision core: identity precedence + event routing
     git.js               # the git probe: repo root, branch, cached origin remote
     tty.js               # opens the live terminal device: CONOUT$ (win32), /dev/tty (POSIX)
-    state.js             # read/write local state (per-OS app-data dir)
+    state.js             # read/write local state (per-OS app-data dir), locked delta writes
+    install.js           # installer: shell profile block, or ~/.claude/settings.json merge
+    shell/
+      init.js            # puts the CLI path into a snippet
+      powershell.ps1     # prompt wrapper, sourced from $PROFILE
+      posix.sh           # the same for bash (PROMPT_COMMAND) and zsh (precmd_functions)
     adapters/
       frame-win.ps1      # Windows 11: foreground HWND (allowlisted) + DWM border/caption paint
                          # (frame-macos, frame-linux-x11 later; same interface)
   bin/
-    install.js           # npx installer: registers hooks in ~/.claude/settings.json
+    aura.js              # the only binary: mark | install | uninstall | shell-init
   test/
     color.test.js        # determinism + distinctness tests (node --test)
 ```
@@ -65,10 +96,15 @@ aura/
 
 No database. One JSON state file: `%LOCALAPPDATA%/aura/state.json`.
 
+Session ids come from whoever called: Claude Code's own `session_id`, or
+`shell-<pid>-<start second>` from a shell snippet. The start second is there
+because Windows recycles pids well inside the 48 h prune window, and a
+recycled pid inheriting a stale entry would inherit its cached HWND with it.
+
 ```json
 {
   "sessions": {
-    "<claude session_id>": {
+    "<claude session_id> | shell-<pid>-<second>": {
       "hwnd": 123456,            // cached after foreground handshake; frame repaints use this
       "repoId": "github.com/kitfunso/hippo",
       "branch": "main",
@@ -87,6 +123,48 @@ No database. One JSON state file: `%LOCALAPPDATA%/aura/state.json`.
 ```
 
 Constraints: file is small, rewritten atomically (write temp + rename). Stale sessions are pruned when `updatedAt` is older than 48 h. aura is the only writer; aura-overlay reads this file and never writes it.
+
+`remotes` is a cache, but it is not optional. `resolveIdentity` fills it from a
+second git spawn, and rule 5 allows only one on the prompt path. So the delta
+write has to carry it, or every prompt pays that spawn again.
+
+### Writes are deltas under a lock (not whole-file overwrites)
+
+Every open shell is now a writer, and a single `mark()` call can spend seconds
+between reading state and writing it (the adapter spawn is a `execFileSync`
+with a 5000 ms timeout). Writing back the snapshot it read would delete every
+entry other shells wrote in that gap, which is exactly the "zero wrong-window
+incidents" metric failing.
+
+So the commit phase writes a delta: only this session's entry, plus one
+`frameOwner` key, applied to a **fresh** read taken under a lock, after the
+slow work. The lock is `state.json.lock`, created with `fs.openSync(path,
+"wx")` because exclusive-create is the atomic primitive every filesystem
+agrees on. Two escape valves keep rule 6 (never stall a prompt): a lock older
+than 5000 ms belonged to a process that died holding it and is taken, and a
+waiter gives up after 200 ms and writes nothing. A lost update costs one
+repaint; a stalled prompt costs the user.
+
+The lock alone was not enough, and a 24-writer race lost an entry about once
+in 40 rounds. Three separate holes, all measured on 2026-08-31 and all fixed:
+
+1. **Windows refuses the rename while a reader holds the destination open.**
+   `renameSync` fails with EPERM, and succeeds the moment that reader closes.
+   With one shared file and one reader per prompt, that lands often enough to
+   see. The temp name is now per process, and the rename waits the reader out
+   to a 250 ms deadline. Note the real sleep granularity here is about 15 ms,
+   not the 5 ms asked for, so budgets are deadlines and never attempt counts.
+2. **An unreadable file read as an empty one.** `readState` caught every error
+   and returned `{sessions:{}}`, which the next write then persisted, deleting
+   every other window. It now returns `null` for any IO error that is not
+   ENOENT, and `updateState` leaves the file alone and reports `false`.
+   Unparseable JSON still starts fresh, so a corrupt file cannot wedge aura.
+3. **Giving up on the lock still wrote.** The timeout path returned a no-op
+   release and carried on unsynchronized, which is the loss the lock exists to
+   prevent. It now writes nothing.
+
+Contention itself was never the problem: the locked section measures ~1 ms,
+and 24 forked writers see a median 2 ms wait with no give-ups at all.
 
 ### Window ownership (why the last two keys are keyed by HWND)
 
@@ -120,20 +198,31 @@ This function is the shared contract: Lane B (the cross-app overlay) must import
 
 ## API Design
 
-No network API. The "API" is two OS/CLI surfaces:
+No network API. The "API" is three OS/CLI surfaces:
 
 - **Hook contract (input):** Claude Code hook JSON on stdin. Used fields: `session_id`, `cwd`, `hook_event_name`, `prompt` (UserPromptSubmit only). Auth model: none needed - hooks run as the user, everything is local.
-- **Escape output:** written directly to the terminal device via `src/tty.js` (`\\.\CONOUT$` on Windows, `/dev/tty` on POSIX), NOT stdout. Claude Code captures hook stdout for context injection; the tty device is the only path to the live terminal. Load-bearing; verified by Spike step 1 of the plan.
+- **CLI contract:** `aura mark [--write] [--cwd <dir>] [--session <id>] [--title <text>]`. Defaults: the process cwd, `shell-<ppid>`, no title. `--write` sends the escapes to the tty device and prints nothing; without it, or when that device is unreachable, they go to stdout for the caller to render. It always exits 0 and prints nothing on failure, because it runs on a prompt path. `aura shell-init --shell <name>` prints the snippet a profile sources; `aura install` / `aura uninstall` wire and unwire it.
+- **Escape output:** written directly to the terminal device via `src/tty.js` (`\\.\CONOUT$` on Windows, `/dev/tty` on POSIX), NOT stdout, whenever the caller is a hook. Claude Code captures hook stdout for context injection; the tty device is the only path to the live terminal. Load-bearing; verified by Spike step 1 of the plan. The CLI is not a hook, so stdout is a legitimate sink for it.
 
 ## Service Boundaries
 - `color.js` owns all color math. Nothing else computes colors.
-- `hook.js` owns Claude Code integration (stdin parsing, event routing, state, escapes). It never contains Win32 knowledge.
+- `mark.js` owns the whole act of marking a window: identity, colors, escapes, the paint, the state delta. It takes its sink and its environment as arguments, so a caller decides where bytes go without `mark.js` knowing who the caller is. It never contains Win32 knowledge.
+- `hook.js` owns Claude Code integration only: parse stdin JSON, call `mark`, exit 0. It is 29 lines and should stay that size; anything it grows belongs in the core.
+- `bin/aura.js` owns argument parsing for every other caller. Adding a command here must never add a branch inside `mark.js`.
+- `src/shell/` owns the prompt snippets. They are dumb on purpose: detect a changed directory, call the CLI, print what comes back, never crash the prompt.
 - `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color and `-Reset` returns the frame to the system default (see Window ownership). `frame-win.ps1` (Win32/DWM) is the v0 adapter.
 - `decide.js` owns every what-to-do rule: identity precedence, when to spawn, who paints, who owns a window. It is pure, so the rules are testable without a desktop.
 - `git.js` owns the only git spawns. It reads git's OUTPUT, never its exit code: `git rev-parse --show-toplevel --abbrev-ref HEAD` exits 128 on a repo with no commits yet (unborn HEAD) while still printing a valid toplevel on stdout. Gating on the exit code made every commitless repo look like a bare folder, which after the no-repo-no-color rule meant no color at all (measured 2026-08-30 on `C:/Users/skf_s/bitfall`). A branch line of literally `HEAD` means unborn or detached: a repo, with no branch. `test/git.test.js` drives real repos created with `git init`.
-- `install.js` owns settings.json editing. It must back up settings.json before writing (matches the user's pre-write-guard convention).
+- `install.js` owns every file aura writes into someone else's config: `~/.claude/settings.json` and shell profiles. It must back the file up before writing (matches the user's pre-write-guard convention).
 
-## Data Flow (primary case: new session starts)
+## Data Flow (shell case: a terminal cds into a repo)
+1. The prompt function compares `$PWD` to the last path it marked. Same path, it returns immediately and nothing runs.
+2. Changed path: it runs `aura mark --write --cwd <dir> --session shell-<pid>-<second>` and captures stdout.
+3. `mark.js` resolves repo + branch, computes colors, builds the escape string, and writes it to the tty device. That device IS the visible console here, so the tint, tab color and title land now.
+4. The snippet prints whatever came back on stdout, which is the fallback for a terminal where the device is not reachable. On the normal path that is empty.
+5. The frame paint follows the same rules as the hook case below: spawn only when no HWND is cached or the color changed. Steady state within one repo is a directory comparison in the shell and nothing else.
+
+## Data Flow (Claude Code case: new session starts)
 1. Claude Code fires SessionStart; `hook.js` gets JSON on stdin.
 2. `hook.js` resolves repo root + branch (`git -C <cwd> rev-parse`), computes colors via `color.js`.
 3. It builds one escape string: OSC 11 (tint), the tab color (Windows Terminal: `OSC 4;200;rgb:RR/GG/BB` + DECAC `ESC[2;15;200,|`, gated on `WT_SESSION`; iTerm2: `OSC 6;1;bg` triple, gated on `TERM_PROGRAM`), and the title `repo · branch`. It writes it to the tty device - the visible path on POSIX. On Windows hooks run with a hidden console (see Known Risks), so visible delivery happens in step 4.
@@ -143,7 +232,7 @@ No network API. The "API" is two OS/CLI surfaces:
 
 ## Cross-Platform Support Matrix
 
-The core (color.js, hook.js, tty.js, state.js) is OS-neutral. Exactly two things vary per OS: the tty device path (handled inside tty.js) and the frame adapter.
+The core (color.js, mark.js, decide.js, tty.js, state.js) is OS-neutral, and so are both callers. Exactly three things vary per OS: the tty device path (handled inside tty.js), the frame adapter, and which shell snippet a profile sources.
 
 | Surface | Tint (OSC 11) | Title (OSC 0) | Tab color | Real frame |
 |---|---|---|---|---|
@@ -164,4 +253,8 @@ Rules: a missing frame adapter degrades to tint + title, never errors. iTerm2 ta
 - **Tabs share one frame** (DWM is per-window). Precisely: the frame keeps the color of the last session that PAINTED it - sessions repaint only on first paint or color change, so a prompt in another tab does not reclaim the frame (observed live: pink -> blue -> pink across three sessions in one window). For one-window-per-session workflows the frame is always right. Per-tab identity = tab color + tint + title. Tab color, MEASURED 2026-08-30 (screenshot-verified on WT stable): `OSC 4;200;rgb:RR/GG/BB` + DECAC `ESC[2;15;200,|` sets the tab to the exact RGB; the basic form `ESC[2;15;1,|` (16-color red) also works. The PR #13058 extended slot 262 recolors the PANE BACKGROUND on this build, not the tab (`OSC 104;262` undoes that). Caveat: a tab launched with `--tabColor` cannot be overridden by the escape.
 - **MEASURED 2026-08-30: DWM caption color is INVISIBLE in stock Windows Terminal** - WT draws its own tab strip over the title bar, so only the 1 px border shows from the frame paint (and snapped/maximized edges hide most of it). In tabbed layouts the tab color + tint ARE the identity; the frame is a bonus for floating windows. Keep painting both DWM attributes: caption shows on conhost and any terminal with a standard title bar.
 - **MEASURED 2026-08-30: the start-time foreground window is a guess.** With five terminal windows open, every session had cached the SAME HWND, because each session started while the user was still looking at another window. A session start cannot prove where it lives; the first prompt can, and it already spawns for the VT backstop. So the first prompt after a start re-resolves the handle (`reresolveWindow` in `decide.js`) and later prompts trust the cache, keeping the steady-state path spawn-free.
+- **Concurrent state writers (design fix 2026-08-31).** One Claude Code session per window wrote state rarely; every open shell writing on every cd does not. Whole-file writes from a stale snapshot would silently drop other windows' entries, and a dropped entry means a lost HWND cache, which means a repaint on the wrong window. Fixed structurally: locked delta writes (see Data Model). The lock alone did not hold, though. A 24-writer race still lost an entry about once in 40 rounds until the rename, the read and the give-up path were each fixed (see Data Model for all three). After that: 200 rounds clean under a concurrent suite load. Regression tests in `test/state.test.js` run 12 concurrent `aura mark` processes, and drive each failure path directly with a fake `renameSync` and `readFileSync`.
+- **A loaded box can read as "not a repo" (observed 2026-08-31).** `runGit` gives git 1500 ms, and under heavy parallel load git exceeded it. The probe then returns null, the identity falls back to the plain cwd, and that prompt gets no color. It self-corrects on the next prompt. The budget stays as it is: a longer one would stall a prompt to fix a case only a saturated machine produces.
+- **A shell prompt is a hotter path than a hook.** A hook runs once per turn; a prompt function runs on every Enter. The snippet therefore compares `$PWD` to the last marked path FIRST and spawns nothing when it matches, so the node start (~70 ms) is paid on a cd, not on every command. A cd into a different repo also spawns the adapter, which is a PowerShell start; that is the honest worst case and it is once per repo change.
+- **Prompt wrapping is other people's territory.** posh-git, oh-my-posh and Starship all own `prompt`. The snippet captures the existing function and calls it, marks its own wrapper with an `aura-prompt` comment, and re-wraps only when something else has since taken the prompt. A profile re-source is therefore a no-op rather than a second wrap. `test/shell.test.js` drives a real PowerShell session with an existing prompt, sources the snippet twice, and asserts one wrap and the original prompt text.
 - **Headless guard (design fix 2026-08-30, broadened same day):** the foreground handshake only runs when a known terminal marker is in the environment (`WT_SESSION`, `WEZTERM_PANE`, `ALACRITTY_WINDOW_ID`, `GHOSTTY_RESOURCES_DIR` - see `TERMINAL_MARKERS` in `src/decide.js`). Cron / Task Scheduler / service-spawned `claude -p` sessions carry no marker, and grabbing the foreground window there would paint an unrelated window the wrong color. The adapter's process-name allowlist is the second layer: even with a marker present, only a terminal-process foreground window is ever painted. `WT_SESSION` is measured on this box; the other markers come from each terminal's docs and are best-effort until tested live. Plain conhost sets no marker and never gets a first paint (tint + title only). Cached-HWND repaints stay allowed.

@@ -1,10 +1,10 @@
 # aura - Product Requirements Document
 
 ## One-Line Description
-aura gives every Claude Code terminal window a color identity (repo = hue, branch = shade) and puts the latest prompt in the window title, so you can tell 10+ agent sessions apart at a glance.
+aura gives every terminal window sitting in a git repo a color identity (repo = hue, branch = shade) and puts the latest prompt in the window title, so you can tell 10+ windows apart at a glance, whatever is running inside them.
 
 ## Problem Statement
-Working with many agent sessions at once is an unsolved UX problem. With more than ~4 Claude Code windows open, every window looks identical and the window title is useless. The user loses track of which window is which repo, which branch, and what they last asked it to do. Existing tools (Slack, Devin, Conductor, Warp) have not solved this either.
+Working with many agent sessions at once is an unsolved UX problem. With more than ~4 terminal windows open, every window looks identical and the window title is useless. The user loses track of which window is which repo, which branch, and what they last asked it to do. The problem is not specific to one agent: a desk runs Claude Code, Codex, Aider, opencode and plain git shells side by side, and a per-agent fix leaves most windows gray. Existing tools (Slack, Devin, Conductor, Warp) have not solved this either.
 
 ## Target Users
 - Primary: Keith - runs 10+ concurrent Claude Code CLI sessions on Windows 11 + Windows Terminal, across many repos and branches. Expert user, owns his own `~/.claude` hook config.
@@ -17,7 +17,8 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
    **Tab color.** The tab header itself is painted with the repo color, so tabs in one window are tellable apart from the tab strip alone. Verified live 2026-08-30 on Windows Terminal (DECAC + `OSC 4` slot 200 for exact RGB; screenshot evidence); iTerm2 uses its `OSC 6;1;bg` escapes. Emitted per prompt from the same hook, gated on terminal detection (`WT_SESSION` / `TERM_PROGRAM`). Caveat: a tab launched with `--tabColor` on its command line cannot be overridden. In tabbed windows this is the PRIMARY identity surface: WT covers the title bar with its own tab strip, so the DWM caption color never shows there.
 4. **Real window frame color.** The OS window border + title bar are painted with the repo color, via a per-OS frame adapter. v0 ships the Windows 11 adapter (DWM API). Works when each session has its own window.
 5. **Latest prompt in the title.** Window title shows `repo · branch · <first ~60 chars of the latest prompt>`. On Windows this is best-effort at paint events only (hooks cannot reach the visible console per prompt without a spawn), and Claude Code itself already sets the tab title to the latest prompt text, which delivers the "latest prompt floating at the top" outcome natively; aura adds the `repo · branch` identity part. Per-prompt title updates from aura are a POSIX-path feature.
-6. **One-command install.** `npx` installer registers the hooks in `~/.claude/settings.json` (merge + backup, never overwrite).
+6. **One-command install.** `npx @kitfunso/aura install --shell <name>` writes the prompt snippet into the shell profile; `npx @kitfunso/aura install` registers the Claude Code hooks in `~/.claude/settings.json`. Both merge + back up and never overwrite, and `uninstall` takes back out exactly what was put in.
+7. **Any terminal in a repo, not just an agent's.** The shell reports its own directory on every prompt (`aura mark`), so a window gets its color whatever runs inside it: Claude Code, Codex, Aider, opencode, or a bare git shell. One core (`src/mark.js`), three callers: the shell prompt, the Claude Code hook (kept because it can color a session at startup, before the first prompt), and any script that knows a window's directory changed.
 
 ## What This Product IS NOT
 1. **NOT a fork or patch of Claude Code.** Hooks + OS APIs only. If a feature needs Claude Code internals, it is out of scope.
@@ -28,6 +29,7 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
 6. **NOT a statusline replacement.** claude-hud stays. A statusline integration (show latest prompt at the bottom) is a possible later add-on, not MVP.
 7. **NOT a telemetry product.** Local only. No network calls, no analytics, nothing leaves the machine.
 8. **NOT an identity for windows with no project.** A session outside a git repo gets no color at all: no tint, no tab color, no frame. The window keeps the terminal's own default, which is what "no project" should look like. A hue-cycling frame shipped for this case on 2026-08-30 and was removed the same day: color means a repo, so coloring "no repo" made every window look assigned.
+9. **NOT an agent detector.** Color means "this window is in this repo", never "an agent is working here". A plain shell in a repo is colored like any other window there. Decided 2026-08-31: detecting which agent owns a window needs a per-agent integration each, and the directory is the thing every one of them already agrees on.
 
 ## Post-MVP Candidates (recorded, not in scope for v0)
 - macOS adapters (tint + title + iTerm2 tab color run from the same core already; frame overlay needs a Mac).
@@ -38,7 +40,7 @@ Working with many agent sessions at once is an unsolved UX problem. With more th
 - With 10 windows open, the user finds the right window in under 2 seconds (today: scan-and-guess).
 - Zero wrong-window incidents (typing into the wrong repo's session) over one week of real use.
 - Install to working color in under 2 minutes via one npx command.
-- Hook overhead under 50 ms per prompt (aura must never make a turn feel slower).
+- Steady-state overhead ~70 ms per prompt, hook or shell (node startup dominates, so the original 50 ms bar is not reachable with a node entry point). aura must never make a turn or a prompt feel slower.
 - Color stability: the same repo maps to the same hue on every launch (deterministic, testable).
 
 ## Constraints

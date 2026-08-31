@@ -5,13 +5,15 @@
 ![platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)
 ![runtime dependencies: 0](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
 
-Color identity for Claude Code terminal sessions. Repo = hue, branch = shade.
-With 10+ agent windows open, you find the right one by color, not by reading.
+Color identity for terminal windows. Repo = hue, branch = shade. Any shell
+sitting in a repo gets the color, so Claude Code, Codex, Aider, opencode and a
+plain git prompt all get one from the same place. With 10+ windows open, you
+find the one you want by color, not by reading.
 
 ![Demo: gray terminal windows get per-repo colors, branches get shades, and aura-overlay rings any window](https://raw.githubusercontent.com/kitfunso/aura/master/assets/demo.gif)
 
 ```
-npx @kitfunso/aura
+npx @kitfunso/aura install --shell powershell
 ```
 
 ![Live QA: pink tab + tinted pane + pink border for the bitfall session, blue tab for the aura session](https://raw.githubusercontent.com/kitfunso/aura/master/docs/img/live-qa.png)
@@ -22,7 +24,7 @@ session's tab is blue. Nothing was configured by hand.
 
 ## What it does
 
-On every Claude Code session start and prompt, a hook:
+When a window enters a repo, aura:
 
 1. **Colors the tab** (Windows Terminal, iTerm2) with the repo's color. In
    tabbed windows this is the primary identity surface.
@@ -34,37 +36,55 @@ On every Claude Code session start and prompt, a hook:
 4. **Sets the title** to `repo · branch` (best-effort; Claude Code itself
    keeps the latest prompt in the title, which covers "what am I doing here").
 
+Three callers, one core. Your shell calls `aura mark` from its prompt when the
+directory changed. Claude Code calls the same core from a hook, which colors a
+session the moment it starts. Any script can call `aura mark --cwd <dir>` when
+it knows a window moved.
+
 Colors are deterministic: the same repo maps to the same hue on every machine,
 every restart. Branches get discrete shades of the repo hue; main/master is
 the base shade. Outside a git repo there is no color: the window keeps your
-terminal's own default, so a colored window always means a project.
+terminal's own default.
+
+So a color means the window is in that repo. It does not mean an agent is
+running in it, and that is the trade for one mechanism every tool gets for free.
 
 ## Install
 
 ```
-npx @kitfunso/aura
+npx @kitfunso/aura install --shell powershell
 ```
 
-From a checkout:
+That wraps your PowerShell prompt, so every window in a repo gets the color
+whatever is running inside it. `--shell bash` and `--shell zsh` write the same
+thing into `~/.bashrc` / `~/.zshrc`. The snippet wraps your existing prompt
+instead of replacing it, so posh-git, oh-my-posh and Starship keep working, and
+it lands between two markers so a re-run replaces it instead of stacking.
+
+Claude Code also has a native hook, which colors a session the moment it starts
+rather than at its next prompt:
 
 ```
-node bin/install.js
+npx @kitfunso/aura install
 ```
 
-This merges two hook entries (SessionStart, UserPromptSubmit) into
-`~/.claude/settings.json`. On the first install the file is backed up to
-`settings.json.aura-bak`; that backup keeps your pre-aura settings and is
-never overwritten by later runs. Re-running adds nothing (idempotent).
-Colors appear in sessions started after the install.
+That merges two hook entries (SessionStart, UserPromptSubmit) into
+`~/.claude/settings.json`. Both installs together are fine: the shell path does
+nothing when the directory has not changed. From a checkout, swap
+`npx @kitfunso/aura` for `node bin/aura.js`.
 
-Uninstall:
+On the first install the target file is copied to `<file>.aura-bak`. That backup
+holds your pre-aura content and later runs never overwrite it. Uninstall takes
+back out exactly what install put in:
 
 ```
-node bin/install.js --uninstall
+npx @kitfunso/aura uninstall --shell powershell
+npx @kitfunso/aura uninstall
 ```
 
-Target a different settings file (testing, non-standard setup) with
-`--settings <path>`; the backup lands next to that file.
+Colors appear in new shells and new Claude Code sessions. Point either install
+at a different file with `--profile <path>` or `--settings <path>`; the backup
+lands next to that file.
 
 Requirements: Windows 11 build 22000+ for the frame color, Windows Terminal
 1.15+ for the tab color, Node.js. Tint + title degrade gracefully elsewhere.
@@ -93,13 +113,19 @@ The design is shaped by four findings, all measured live on 2026-08-30
   `ESC[2;15;200,|`). The extended palette slot 262 from the WT tab-color PR
   recolors the pane background on current builds, not the tab.
 
-Repo layout: `src/color.js` (the pure color contract), `src/hook.js` (hook
-entry), `src/tty.js` (terminal device), `src/adapters/frame-win.ps1` (all
-Win32 code), `bin/install.js` (installer). Tests (run from the repo root;
-Windows node does not resolve a bare directory for `--test`):
+The shell path dodges the first of those: a shell prompt owns a visible
+console, so `aura mark --write` puts the escapes there itself and needs no
+PowerShell hop for them. The frame paint still spawns the adapter, once per
+window and color.
+
+Repo layout: `src/color.js` (the pure color contract), `src/mark.js` (the core
+every caller goes through), `src/hook.js` and `bin/aura.js` (the two callers),
+`src/shell/` (the prompt snippets), `src/tty.js` (terminal device),
+`src/adapters/frame-win.ps1` (all Win32 code), `src/install.js` (installer).
+Tests, from the repo root:
 
 ```
-node --test test/color.test.js test/decide.test.js test/install.test.js
+npm test
 ```
 
 ## Cross-platform
