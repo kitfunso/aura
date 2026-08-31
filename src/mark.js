@@ -9,7 +9,7 @@ const {
   decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
 } = require("./decide.js");
 const { resolveIdentity } = require("./git.js");
-const { readState, writeState, pruneStale, stateFile } = require("./state.js");
+const { readState, updateState, stateFile } = require("./state.js");
 
 const ESC = "\u001b";
 const BEL = "\u0007";
@@ -105,7 +105,7 @@ function mark({
   if (!redeliverVt) session.vtHex = colors.frameHex;
   session.tty = sink(escapes);
 
-  const owners = state.frameOwner || (state.frameOwner = {});
+  const owners = state.frameOwner || {};
   const plan = decideEvent({
     eventName,
     platform: process.platform,
@@ -139,12 +139,6 @@ function mark({
       if (plan.markVtHex && redeliverVt) session.vtHex = colors.frameHex;
     }
   }
-  // Ownership is keyed by HWND, because tabs share one frame.
-  if (session.hwnd && process.platform === "win32") {
-    const hwndKey = String(session.hwnd);
-    if (painted) owners[hwndKey] = sessionId;
-    else if (cleared) owners[hwndKey] = "cleared";
-  }
   session.repoId = identity.repoId;
   session.branch = identity.branch;
   // repoId is a path either way, so it cannot tell a repo from a bare shell.
@@ -152,9 +146,18 @@ function mark({
   session.frameHex = colors.frameHex;
   if (promptText) session.lastPrompt = sanitizeForTitle(promptText).slice(0, 200);
   session.updatedAt = new Date().toISOString();
-  state.sessions[sessionId] = session;
-  pruneStale(state);
-  writeState(state);
+  // Only this session's entry is ours to write; the rest of the file belongs
+  // to concurrent shells, so the delta goes onto a fresh read under a lock.
+  updateState(function (fresh) {
+    fresh.sessions[sessionId] = session;
+    // Ownership is keyed by HWND, because tabs share one frame.
+    if (session.hwnd && process.platform === "win32") {
+      const freshOwners = fresh.frameOwner || (fresh.frameOwner = {});
+      const hwndKey = String(session.hwnd);
+      if (painted) freshOwners[hwndKey] = sessionId;
+      else if (cleared) freshOwners[hwndKey] = "cleared";
+    }
+  });
   return { identity, colors, escapes, hwnd: session.hwnd || null };
 }
 
