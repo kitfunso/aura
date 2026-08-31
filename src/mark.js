@@ -18,6 +18,9 @@ const PROMPT_SNIPPET_LEN = 60;
 // Palette slot redefined to carry the tab RGB, then selected with DECAC. It sits
 // above 255 so aura never repaints an index text can be printed in.
 const TAB_COLOR_SLOT = 264;
+// Slot 200 was that slot until 0.1.1 and was never given back, so a window an
+// older build painted keeps a wrong text color for the life of its tab.
+const LEGACY_TAB_SLOT = 200;
 
 // Prompt text lands inside an escape sequence: strip control bytes so it can
 // never terminate or inject a sequence of its own.
@@ -25,9 +28,25 @@ function sanitizeForTitle(text) {
   return String(text).replace(/[\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
-function buildEscapes(colors, title, usesColor, env) {
-  if (!usesColor) return title ? `${ESC}]0;${title}${BEL}` : "";
-  let out = `${ESC}]11;${colors.tintHex}${BEL}`;
+// The undo for every color the set branch below writes. OSC 111 and OSC 104
+// land the terminal back on the user's own configured colors, not aura's last.
+function restoreEscapes(env) {
+  let out = `${ESC}]111${BEL}`;
+  if (env.WT_SESSION) {
+    out += `${ESC}]104;${TAB_COLOR_SLOT}${BEL}`;
+    out += `${ESC}]104;${LEGACY_TAB_SLOT}${BEL}`;
+  }
+  return out;
+}
+
+// wasColored is the previous run's answer: aura restores only what it set, so a
+// terminal it never touched keeps whatever colors the user configured.
+function buildEscapes(colors, title, usesColor, env, wasColored) {
+  const titleEscape = title ? `${ESC}]0;${title}${BEL}` : "";
+  if (!usesColor) return (wasColored ? restoreEscapes(env) : "") + titleEscape;
+  // Clearing the old slot on the way past is what repairs an already-wrong tab.
+  let out = env.WT_SESSION ? `${ESC}]104;${LEGACY_TAB_SLOT}${BEL}` : "";
+  out += `${ESC}]11;${colors.tintHex}${BEL}`;
   const hex = colors.frameHex;
   if (env.WT_SESSION) {
     const r = hex.slice(1, 3);
@@ -43,8 +62,7 @@ function buildEscapes(colors, title, usesColor, env) {
     out += `${ESC}]6;1;bg;green;brightness;${g}${BEL}`;
     out += `${ESC}]6;1;bg;blue;brightness;${b}${BEL}`;
   }
-  if (title) out += `${ESC}]0;${title}${BEL}`;
-  return out;
+  return out + titleEscape;
 }
 
 // The tab's own name, read through the same allowlist the frame paint uses. The
@@ -142,10 +160,11 @@ function mark({
   // Writing a title over an identity we READ from that title renames it, and
   // the rename would move the color on the next prompt.
   const title = identity.fromWindowTitle ? "" : titleParts.join(" · ");
-  const escapes = buildEscapes(colors, title, identity.hasColor, env);
+  const wasColored = session.hasColor === true;
+  const escapes = buildEscapes(colors, title, identity.hasColor, env, wasColored);
   // The signature covers what was delivered, not just its color, so any change
   // to the escapes re-delivers. The title is out: it moves every prompt.
-  const vtSignature = fnv1a(buildEscapes(colors, "", identity.hasColor, env)).toString(36);
+  const vtSignature = fnv1a(buildEscapes(colors, "", identity.hasColor, env, wasColored)).toString(36);
 
   // A caller that writes to a visible console has already delivered them, so
   // caching here is what keeps the adapter off that caller's prompt path.
@@ -211,4 +230,4 @@ function mark({
   return { identity, colors, escapes, hwnd: session.hwnd || null };
 }
 
-module.exports = { mark, buildEscapes, sanitizeForTitle };
+module.exports = { mark, buildEscapes, restoreEscapes, sanitizeForTitle };

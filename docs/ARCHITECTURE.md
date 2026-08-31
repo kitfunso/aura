@@ -239,6 +239,45 @@ colorsFor({ repoId, branch }) -> { hue, tintHex, frameHex, shadeIndex }
 
 This function is the shared contract: Lane B (the cross-app overlay) must import or port it unchanged so a repo has ONE color across every surface. Changing the mapping is a breaking change and needs a note in the PRD.
 
+### Giving the terminal back (every set has an undo)
+
+The escapes aura writes are not scoped to a process. `OSC 11` (default
+background) and `OSC 4;<slot>` (palette entry) mutate the terminal itself and
+persist for the life of the tab, so a window aura colored stayed colored after
+the shell left the repo, after the agent exited, and after aura was uninstalled.
+Closing the tab was the only way back. That is what `buildEscapes` returning
+"just the title" off-repo actually meant.
+
+`buildEscapes` is now symmetric. It takes `wasColored` (the previous run's
+`session.hasColor`) and returns the undo when a session that HAD color no longer
+does:
+
+- `OSC 111` resets the default background, the counterpart to `OSC 11`.
+- `OSC 104;264` resets the tab slot, the counterpart to `OSC 4;264`. DECAC still
+  points at 264, which now holds the terminal's own default, so it needs no undo.
+- `OSC 104;200` repairs the slot aura owned until 0.1.1 and never released. It
+  rides BOTH branches, because a window that never leaves its repo would
+  otherwise keep a wrong text color forever. Slot 200 is inside the 256-color
+  text palette, so anything printed in color 200 came out as the repo color.
+
+Support: OSC 104/110/111/112/117 landed in microsoft/terminal PR #18767, merged
+2025-04-10 and serviced into 1.22 and 1.23. This box runs 1.24.11911.0. The
+Microsoft conhost VT reference does not list them, or OSC 10/11 either, and is
+not the authority on Windows Terminal.
+
+`wasColored` is what keeps this honest: aura restores only what aura set, so a
+terminal it never touched keeps whatever colors the user configured. Delivery is
+once, not per prompt, because the restore changes the `vtSignature` digest and
+the next identical prompt matches the cached one.
+
+Two places outside the prompt path need the same undo: `aura uninstall` writes it
+to the terminal it runs in before removing the code that could, and a session
+whose color is cleared gets it through the same builder.
+
+Known gap: on iTerm2 the background is restored by `OSC 111`, but the tab color
+set through `OSC 6;1;bg;*` is not. The reset form is untested here, and shipping
+an unverified escape is worse than a documented gap.
+
 ## API Design
 
 No network API. The "API" is three OS/CLI surfaces:

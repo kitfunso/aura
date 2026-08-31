@@ -7,6 +7,8 @@ const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
 const { shellSnippet, SHELLS } = require("./shell/init.js");
+const { restoreEscapes } = require("./mark.js");
+const { writeToTerminal } = require("./tty.js");
 
 function argValue(flag) {
   const index = process.argv.indexOf(flag);
@@ -142,7 +144,15 @@ function installShell(shell, uninstall) {
   if (!uninstall) console.log("aura: colors appear in NEW shells. Open a terminal in a repo to see it.");
 }
 
+// Taking aura out leaves the window wearing aura's colors, and the code that
+// could give them back is what is being removed.
+function restoreThisTerminal() {
+  try { writeToTerminal(restoreEscapes(process.env)); }
+  catch (err) { /* an uninstall with no terminal to write to still succeeds */ }
+}
+
 function run(uninstall) {
+  if (uninstall) restoreThisTerminal();
   const shell = argValue("--shell");
   if (shell) {
     if (SHELLS.indexOf(shell) === -1) {
