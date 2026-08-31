@@ -107,3 +107,65 @@ test("missing settings file: exit 1", () => {
     assert.strictEqual(runInstaller(["--settings", file], true), 1);
   });
 });
+
+const PRE_PROFILE = "Set-Alias ll Get-ChildItem\n\nfunction prompt { 'mine> ' }\n";
+
+function withProfile(contents, fn) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-profile-"));
+  try {
+    const file = path.join(dir, "profile.ps1");
+    if (contents !== undefined) fs.writeFileSync(file, contents);
+    fn(file);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("shell install appends a marked block and leaves the profile above it alone", () => {
+  withProfile(PRE_PROFILE, (file) => {
+    runInstaller(["--shell", "powershell", "--profile", file]);
+    const after = fs.readFileSync(file, "utf8");
+    assert.ok(after.startsWith(PRE_PROFILE), "the user's own profile stays first, byte for byte");
+    assert.ok(after.includes("# >>> aura >>>") && after.includes("# <<< aura <<<"));
+    assert.ok(after.includes("aura-prompt"), "the wrapped prompt is in the block");
+    assert.strictEqual(after.indexOf("__AURA_CLI__"), -1, "the CLI path is substituted");
+    assert.strictEqual(fs.readFileSync(file + ".aura-bak", "utf8"), PRE_PROFILE);
+    assert.strictEqual(fs.existsSync(file + ".aura-tmp"), false);
+  });
+});
+
+test("re-running the shell install replaces the block instead of stacking blocks", () => {
+  withProfile(PRE_PROFILE, (file) => {
+    runInstaller(["--shell", "powershell", "--profile", file]);
+    const afterFirst = fs.readFileSync(file, "utf8");
+    runInstaller(["--shell", "powershell", "--profile", file]);
+    const afterSecond = fs.readFileSync(file, "utf8");
+    assert.strictEqual(afterSecond, afterFirst);
+    assert.strictEqual(afterSecond.split("# >>> aura >>>").length - 1, 1);
+  });
+});
+
+test("shell uninstall leaves the rest of the profile byte-identical", () => {
+  withProfile(PRE_PROFILE, (file) => {
+    runInstaller(["--shell", "powershell", "--profile", file]);
+    runInstaller(["--shell", "powershell", "--profile", file, "--uninstall"]);
+    assert.strictEqual(fs.readFileSync(file, "utf8"), PRE_PROFILE);
+  });
+});
+
+test("shell install creates a profile that does not exist yet", () => {
+  withProfile(undefined, (file) => {
+    runInstaller(["--shell", "powershell", "--profile", file]);
+    const after = fs.readFileSync(file, "utf8");
+    assert.ok(after.startsWith("# >>> aura >>>"));
+    assert.strictEqual(fs.existsSync(file + ".aura-bak"), false, "nothing existed to back up");
+  });
+});
+
+test("bash and zsh get the posix snippet, and an unknown shell exits 1", () => {
+  withProfile("export PATH=$PATH\n", (file) => {
+    runInstaller(["--shell", "bash", "--profile", file]);
+    assert.ok(fs.readFileSync(file, "utf8").includes("aura_mark_cwd"));
+    assert.strictEqual(runInstaller(["--shell", "fish", "--profile", file], true), 1);
+  });
+});
