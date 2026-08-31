@@ -45,7 +45,9 @@ A shell prompt has no TUI init race, so the 2000 ms delayed write that `SessionS
 
 ### Session identity
 
-`shell-<pid>`. Stable for the life of that shell, dies with it, pruned by the existing 48 h sweep.
+`shell-<pid>-<start second>`. Stable for the life of that shell, pruned by the existing 48 h sweep.
+
+The start second is not decoration. Windows recycles pids well inside 48 h, and a stale entry whose repo and colour happen to match makes `decide.js` skip the window re-resolve, so the new shell either never gets its window checked or a later repaint lands on the dead shell's window.
 
 ### Cost on the prompt path
 
@@ -79,6 +81,12 @@ The snippet compares `$PWD` against the last value it marked and returns immedia
 **Verify:** live in a real terminal, `cd` between two repos and watch the colour change.
 **Commit:** `feat: shell prompt integration for powershell, bash and zsh`
 
+### Step 3b: state.json survives concurrent writers
+**Files:** `src/state.js`, `src/mark.js`
+**What:** added after an outside review of this plan. `readState` to `writeState` currently spans the adapter spawn, so two shells marking at once lose one of the two session entries. Commit only this session's delta, under an exclusive lock taken after the slow work, not around it.
+**Verify:** a test that runs many `aura mark` processes at once and asserts every session entry survives.
+**Commit:** `fix: commit state as a locked delta, not a whole file overwrite`
+
 ### Step 4: installer support
 **Files:** `bin/install.js`
 **What:** `--shell` appends a marked block to the profile, `--uninstall` removes exactly that block. Back up first, same contract as the settings.json path.
@@ -96,6 +104,7 @@ The snippet compares `$PWD` against the last value it marked and returns immedia
 ## Risks
 
 1. **Two writers per window.** A shell tab and a Claude Code tab in the same window both mark. They agree on colour for the same repo, so only the frame (a window-level property) can disagree. The existing `frameOwner` HWND map already arbitrates this.
-2. **Prompt-function collisions.** posh-git, oh-my-posh and Starship all replace `prompt`. Capturing the previous function and calling it is the only safe shape; Starship overwrites on every init, so document that aura's line must come after it.
-3. **Latency.** ~70 ms on a directory change. Only paid on `cd`.
+2. **Prompt-function collisions.** posh-git, oh-my-posh and Starship all replace `prompt`. Capturing the previous function and calling it is the only safe shape. The wrapper is tagged `aura-prompt` and the guard tests for that tag, so a profile re-source is a no-op but a theme that stole the prompt is picked back up.
+3. **Latency.** One node start (~70 ms) on a `cd` inside the same repo. A `cd` to a *different* repo also spawns the adapter for the DWM paint, which is a PowerShell start, not 70 ms. Same directory costs one string compare.
 4. **A shell that never prints a prompt** (a script, a CI job) never marks. That is correct, not a gap.
+5. **Concurrent writers to `state.json`.** Every shell prompt is now a writer, so the existing read-modify-write loses updates routinely instead of rarely. A lost session entry drops the cached HWND, and the re-resolve uses `GetForegroundWindow`, which may be somebody else's window. Fixed in step 3b, not deferred.

@@ -93,6 +93,48 @@ test("--title appends a snippet, sanitized of control bytes", () => {
   }
 });
 
+test("--write prints nothing, or the same escapes when no terminal device answers", () => {
+  const dir = makeRepo("main");
+  try {
+    const written = runMark(dir, ["--write"]);
+    assert.ok(written === "" || written === runMark(dir), "fallback is the plain payload");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("shell-init emits a runnable snippet with the CLI path filled in", () => {
+  for (const shell of ["powershell", "bash", "zsh"]) {
+    const out = execFileSync(process.execPath, [CLI, "shell-init", "--shell", shell]).toString();
+    assert.strictEqual(out.indexOf("__AURA_CLI__"), -1, shell + ": placeholder substituted");
+    assert.ok(out.includes("bin/aura.js"), shell + ": points at this CLI");
+    assert.ok(out.includes("--session"), shell + ": passes a stable session id");
+  }
+});
+
+test("the powershell snippet guards against wrapping its own prompt twice", () => {
+  const out = execFileSync(process.execPath, [CLI, "shell-init", "--shell", "powershell"]).toString();
+  assert.ok(out.includes("aura-prompt"), "the wrapper is tagged");
+  assert.ok(out.includes("notmatch 'aura-prompt'"), "and the tag is what the guard tests");
+});
+
+test("the posix snippet appends to the prompt hook rather than replacing it", () => {
+  const out = execFileSync(process.execPath, [CLI, "shell-init", "--shell", "bash"]).toString();
+  assert.ok(out.includes("$PROMPT_COMMAND"), "keeps an existing PROMPT_COMMAND");
+  assert.ok(out.includes("precmd_functions"), "keeps an existing zsh precmd");
+  assert.ok(out.includes("*aura_mark_cwd*"), "and does not append itself twice");
+});
+
+test("shell-init rejects an unknown shell", () => {
+  let code = 0;
+  try {
+    execFileSync(process.execPath, [CLI, "shell-init", "--shell", "fish"], { stdio: "ignore" });
+  } catch (err) {
+    code = err.status;
+  }
+  assert.strictEqual(code, 1);
+});
+
 test("an unknown command exits non-zero and prints nothing on stdout", () => {
   let code = 0;
   let stdout = "";
