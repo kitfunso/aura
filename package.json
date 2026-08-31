@@ -1,7 +1,7 @@
 {
   "name": "@kitfunso/aura",
   "version": "0.1.0",
-  "description": "Color identity for Claude Code terminal windows: repo = hue, branch = shade, latest prompt in the title.",
+  "description": "Color identity for terminal windows: repo = hue, branch = shade, tab name when no repo names it. Any shell, any agent.",
   "license": "MIT",
   "author": "kitfunso",
   "repository": {
