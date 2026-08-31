@@ -1,12 +1,12 @@
-#!/usr/bin/env node
 "use strict";
 // Wires aura into the two things that can call it: Claude Code's hooks, and a
 // shell profile. Rule 4: back up first, merge, NEVER overwrite. Flags:
-// --uninstall, --settings <path>, --shell <name>, --profile <path>.
+// --settings <path>, --shell <name>, --profile <path>.
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { shellSnippet, SHELLS } = require("./shell/init.js");
 
 function argValue(flag) {
   const index = process.argv.indexOf(flag);
@@ -19,9 +19,9 @@ const BLOCK_OPEN = "# >>> aura >>>";
 const BLOCK_CLOSE = "# <<< aura <<<";
 
 // Forward slashes work in every shell Claude Code uses to run hook commands.
-const hookScript = path.resolve(__dirname, "..", "src", "hook.js").replace(/\\/g, "/");
+const hookScript = path.resolve(__dirname, "hook.js").replace(/\\/g, "/");
 const hookCommand = 'node "' + hookScript + '"';
-const cli = path.resolve(__dirname, "aura.js");
+const cli = path.resolve(__dirname, "..", "bin", "aura.js");
 
 function backUpOnce(file, raw) {
   // Only the first run writes the backup: it holds the pre-aura content.
@@ -127,7 +127,7 @@ function installShell(shell, uninstall) {
   const stripped = withoutAuraBlock(raw);
   let next = stripped;
   if (!uninstall) {
-    const snippet = execFileSync(process.execPath, [cli, "shell-init", "--shell", shell]).toString();
+    const snippet = shellSnippet(shell, cli);
     const block = BLOCK_OPEN + "\n" + snippet.replace(/\n+$/, "") + "\n" + BLOCK_CLOSE + "\n";
     next = stripped ? stripped.replace(/\n*$/, "\n\n") + block : block;
   }
@@ -142,12 +142,11 @@ function installShell(shell, uninstall) {
   if (!uninstall) console.log("aura: colors appear in NEW shells. Open a terminal in a repo to see it.");
 }
 
-function main() {
-  const uninstall = process.argv.indexOf("--uninstall") !== -1;
+function run(uninstall) {
   const shell = argValue("--shell");
   if (shell) {
-    if (["powershell", "bash", "zsh"].indexOf(shell) === -1) {
-      console.error("aura: unknown shell " + shell + ". Known: powershell, bash, zsh");
+    if (SHELLS.indexOf(shell) === -1) {
+      console.error("aura: unknown shell " + shell + ". Known: " + SHELLS.join(", "));
       process.exit(1);
     }
     installShell(shell, uninstall);
@@ -156,4 +155,4 @@ function main() {
   installHooks(uninstall);
 }
 
-main();
+module.exports = { run };

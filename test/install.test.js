@@ -1,7 +1,7 @@
 "use strict";
-// bin/install.js through its CLI, against --settings targets in a temp dir.
-// It writes the user's whole hook config (rule 4), so nothing here is trusted
-// from inspection.
+// "aura install" through the real CLI, against --settings targets in a temp
+// dir. It writes the user's whole hook config (rule 4), so nothing here is
+// trusted from inspection.
 const test = require("node:test");
 const assert = require("node:assert");
 const { execFileSync } = require("child_process");
@@ -9,11 +9,11 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const INSTALLER = path.join(__dirname, "..", "bin", "install.js");
+const CLI = path.join(__dirname, "..", "bin", "aura.js");
 
 function runInstaller(args, allowFailure) {
   try {
-    execFileSync(process.execPath, [INSTALLER].concat(args), {
+    execFileSync(process.execPath, [CLI, "install"].concat(args), {
       stdio: ["ignore", "pipe", "pipe"],
     });
     return 0;
@@ -21,6 +21,12 @@ function runInstaller(args, allowFailure) {
     if (!allowFailure) throw err;
     return err.status;
   }
+}
+
+function runUninstaller(args) {
+  execFileSync(process.execPath, [CLI, "uninstall"].concat(args), {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 }
 
 // try/finally instead of t.after: works on every node >= 18.
@@ -76,7 +82,7 @@ test("reinstall is idempotent: file byte-identical after a second run", () => {
 test("uninstall removes only aura's groups", () => {
   withSettings(PRE_AURA, (file) => {
     runInstaller(["--settings", file]);
-    runInstaller(["--settings", file, "--uninstall"]);
+    runUninstaller(["--settings", file]);
     const settings = JSON.parse(fs.readFileSync(file, "utf8"));
     assert.strictEqual(auraGroups(settings, "SessionStart").length, 0);
     assert.strictEqual(auraGroups(settings, "UserPromptSubmit").length, 0);
@@ -88,7 +94,7 @@ test("uninstall removes only aura's groups", () => {
 test("backup keeps the FIRST pre-aura copy across install/uninstall cycles", () => {
   withSettings(PRE_AURA, (file) => {
     runInstaller(["--settings", file]);
-    runInstaller(["--settings", file, "--uninstall"]);
+    runUninstaller(["--settings", file]);
     runInstaller(["--settings", file]);
     assert.strictEqual(fs.readFileSync(file + ".aura-bak", "utf8"), PRE_AURA);
   });
@@ -148,7 +154,7 @@ test("re-running the shell install replaces the block instead of stacking blocks
 test("shell uninstall leaves the rest of the profile byte-identical", () => {
   withProfile(PRE_PROFILE, (file) => {
     runInstaller(["--shell", "powershell", "--profile", file]);
-    runInstaller(["--shell", "powershell", "--profile", file, "--uninstall"]);
+    runUninstaller(["--shell", "powershell", "--profile", file]);
     assert.strictEqual(fs.readFileSync(file, "utf8"), PRE_PROFILE);
   });
 });

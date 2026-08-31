@@ -3,20 +3,22 @@
 // The agent-neutral entry point: whoever knows the working directory changed
 // calls "aura mark". Unlike the hook it may print escapes on stdout, because
 // its caller owns a visible console. Design: docs/ARCHITECTURE.md.
-const fs = require("fs");
-const path = require("path");
 const { mark } = require("../src/mark.js");
 const { writeToTerminal } = require("../src/tty.js");
-
-const SNIPPETS = { powershell: "powershell.ps1", bash: "posix.sh", zsh: "posix.sh" };
+const { shellSnippet, SHELLS } = require("../src/shell/init.js");
 
 const USAGE = [
   "usage: aura mark [--write] [--cwd <dir>] [--session <id>] [--title <text>]",
+  "       aura install [--shell powershell|bash|zsh] [--settings <path>] [--profile <path>]",
+  "       aura uninstall [same flags as install]",
   "       aura shell-init [--shell powershell|bash|zsh]",
   "",
   "  mark        print the escape sequences for <dir>, and paint the window frame.",
   "              --write sends them to the terminal device instead, falling back",
   "              to stdout when that device is not reachable.",
+  "  install     with --shell, wire that shell's prompt. Without it, register the",
+  "              Claude Code hooks in ~/.claude/settings.json.",
+  "  uninstall   take back out what install put in.",
   "  shell-init  print the prompt snippet to source from a shell profile.",
 ].join("\n");
 
@@ -45,13 +47,12 @@ function commandMark() {
 
 function commandShellInit() {
   const shell = argValue("--shell") || (process.platform === "win32" ? "powershell" : "bash");
-  if (!SNIPPETS[shell]) {
-    console.error("aura: unknown shell " + shell + ". Known: " + Object.keys(SNIPPETS).join(", "));
+  const snippet = shellSnippet(shell, __filename);
+  if (!snippet) {
+    console.error("aura: unknown shell " + shell + ". Known: " + SHELLS.join(", "));
     process.exit(1);
   }
-  const snippet = fs.readFileSync(path.join(__dirname, "..", "src", "shell", SNIPPETS[shell]), "utf8");
-  // Forward slashes work in every shell this snippet targets.
-  process.stdout.write(snippet.replace(/__AURA_CLI__/g, __filename.replace(/\\/g, "/")));
+  process.stdout.write(snippet);
 }
 
 const command = process.argv[2];
@@ -62,6 +63,10 @@ if (command === "mark") {
 }
 if (command === "shell-init") {
   commandShellInit();
+  process.exit(0);
+}
+if (command === "install" || command === "uninstall") {
+  require("../src/install.js").run(command === "uninstall");
   process.exit(0);
 }
 console.error(USAGE);

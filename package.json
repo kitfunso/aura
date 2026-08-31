@@ -13,8 +13,7 @@
     "url": "https://github.com/kitfunso/aura/issues"
   },
   "bin": {
-    "aura": "bin/aura.js",
-    "aura-install": "bin/install.js"
+    "aura": "bin/aura.js"
   },
   "files": [
     "src/",
