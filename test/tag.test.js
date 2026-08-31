@@ -7,6 +7,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { inTerminalSession } = require("../src/tag.js");
 
 const CLI = path.join(__dirname, "..", "bin", "aura.js");
 
@@ -118,4 +119,34 @@ test("a missing directory is refused, not recorded", () => {
     fs.rmSync(stateHome, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
+});
+
+test("a tag paints the window at once, because no prompt is coming", () => {
+  const { stateHome, env } = makeSandbox();
+  const repo = makeRepo("main");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aura-taghome4-"));
+  try {
+    // A marker no adapter can act on: it proves the gate, not the desktop.
+    const seen = Object.assign({}, env, { WEZTERM_PANE: "7" });
+    run(seen, home, ["tag", repo, "--session", "s4"]);
+    const painted = stateOf(stateHome).sessions.s4;
+    assert.strictEqual(painted.isRepo, true, "the tag was resolved and marked");
+    assert.ok(painted.frameHex, "a color was computed for the window");
+
+    run(env, home, ["tag", repo, "--session", "s5"]);
+    const quiet = stateOf(stateHome).sessions.s5;
+    assert.strictEqual(quiet.frameHex, undefined, "nothing to paint with no terminal");
+  } finally {
+    fs.rmSync(stateHome, { recursive: true, force: true });
+    fs.rmSync(repo, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the paint gate takes any agent's session variable as proof", () => {
+  assert.strictEqual(inTerminalSession({}), false);
+  assert.strictEqual(inTerminalSession({ PATH: "/usr/bin" }), false);
+  assert.strictEqual(inTerminalSession({ AURA_SESSION: "shell-1-2" }), true);
+  assert.strictEqual(inTerminalSession({ CLAUDE_CODE_SESSION_ID: "abc" }), true);
+  assert.strictEqual(inTerminalSession({ TERM_PROGRAM: "iTerm.app" }), true);
 });

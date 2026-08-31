@@ -6,7 +6,9 @@
 const { mark } = require("../src/mark.js");
 const { writeToTerminal } = require("../src/tty.js");
 const { shellSnippet, SHELLS } = require("../src/shell/init.js");
-const { sessionKey, readTag, writeTag, resolveTarget } = require("../src/tag.js");
+const {
+  sessionKey, readTag, writeTag, resolveTarget, inTerminalSession,
+} = require("../src/tag.js");
 
 const USAGE = [
   "usage: aura mark [--write] [--cwd <dir>] [--session <id>] [--title <text>]",
@@ -19,8 +21,9 @@ const USAGE = [
   "              --write sends them to the terminal device instead, falling back",
   "              to stdout when that device is not reachable.",
   "  tag         color this session as <dir> instead of the working directory,",
-  "              for an agent launched somewhere that names no project. With no",
-  "              argument it prints the current tag. --clear goes back to cwd.",
+  "              for an agent launched somewhere that names no project. It paints",
+  "              the window at once, so an agent with no prompt hook still gets a",
+  "              color. With no argument it prints the tag. --clear goes to cwd.",
   "  install     with --shell, wire that shell's prompt. Without it, register the",
   "              Claude Code hooks in ~/.claude/settings.json.",
   "  uninstall   take back out what install put in.",
@@ -60,6 +63,21 @@ function commandShellInit() {
   process.stdout.write(snippet);
 }
 
+// A full-screen agent has no prompt to fire after this, so the tag would sit in
+// state unread. The escapes ride the adapter, the way a hook's do.
+function paintTagged(sessionId) {
+  if (!inTerminalSession(process.env)) return;
+  try {
+    mark({
+      cwd: process.cwd(),
+      sessionId,
+      eventName: "prompt",
+      sink: writeToTerminal,
+      redeliverVt: true,
+    });
+  } catch (err) { /* the tag is written; a failed paint must not fail the CLI */ }
+}
+
 function commandTag() {
   const id = sessionKey(process.env, argValue("--session"));
   const clear = process.argv.indexOf("--clear") !== -1;
@@ -78,6 +96,7 @@ function commandTag() {
     console.error("aura: state file is busy, nothing written");
     return 1;
   }
+  paintTagged(id);
   console.log(clear ? id + ": tag cleared" : id + ": tagged " + resolved);
   return 0;
 }

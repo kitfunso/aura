@@ -63,9 +63,9 @@ aura tag --clear      # back to the working directory
 
 Run it from inside an agent and it tags that agent's own session. The key comes
 from `CLAUDE_CODE_SESSION_ID`, or from `AURA_SESSION`, which the shell snippet
-exports to every process the window starts. The color lands on the next prompt,
-because that is the next moment something with a visible console runs. A tag
-lives and dies with its session, so nothing outlives the window that set it.
+exports to every process the window starts. The color lands at once, through
+the same path a hook paints on, so an agent with no prompt hook still gets one.
+A tag lives and dies with its session, so nothing outlives the window that set it.
 
 ## Install
 

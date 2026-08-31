@@ -11,13 +11,22 @@ function sessionKey(env, explicit) {
   return explicit || env.CLAUDE_CODE_SESSION_ID || env.AURA_SESSION || "shell-" + process.ppid;
 }
 
+// Proof that a person is sitting in a terminal. A headless run has none of
+// these, and painting a foreground window there colors an unrelated app.
+const SESSION_MARKERS = [
+  "WT_SESSION", "TERM_PROGRAM", "CLAUDE_CODE_SESSION_ID", "AURA_SESSION",
+  "WEZTERM_PANE", "ALACRITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR",
+];
+
+function inTerminalSession(env) {
+  return SESSION_MARKERS.some(function (name) { return Boolean(env[name]); });
+}
+
 function readTag(sessionId) {
   const state = readState();
   return (state && state.tags && state.tags[sessionId]) || null;
 }
 
-// State only, no escapes and no adapter: a CLI run from an agent's tool call
-// has no visible console, so the next prompt owns the painting.
 function writeTag(sessionId, target) {
   return updateState(function (fresh) {
     const tags = fresh.tags || (fresh.tags = {});
@@ -38,4 +47,4 @@ function resolveTarget(arg, cwd) {
   }
 }
 
-module.exports = { sessionKey, readTag, writeTag, resolveTarget };
+module.exports = { sessionKey, readTag, writeTag, resolveTarget, inTerminalSession };
