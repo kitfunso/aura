@@ -42,7 +42,9 @@ function windowHasRepoSession(sessions, hwnd, exceptSessionId) {
 }
 
 function decideEvent({ eventName, platform, session, frameHex, isRepo, windowFrameCleared }) {
-  const isPrompt = eventName === "UserPromptSubmit";
+  // "prompt" is the shell caller's name for the same thing: the window is
+  // already up, so there is no TUI init race to wait out.
+  const isPrompt = eventName === "UserPromptSubmit" || eventName === "prompt";
   // A session start may land in a new tab or window, so it re-handshakes.
   const clearHandshake = !isPrompt;
   const cachedVtHex = clearHandshake ? undefined : session.vtHex;
