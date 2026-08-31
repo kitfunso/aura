@@ -115,7 +115,10 @@ recycled pid inheriting a stale entry would inherit its cached HWND with it.
       "hwnd": 123456,            // cached after foreground handshake; frame repaints use this
       "repoId": "github.com/kitfunso/hippo",
       "branch": "main",
-      "isRepo": true,            // repoId is a path either way, so it cannot carry this
+      "isRepo": true,            // a git repo, literally; repoId is a path either way
+      "hasColor": true,          // aura owns a color here: a repo, a tag, or a named tab
+      "windowName": "intraday",  // the tab name, settled once per session; "" means asked and refused
+      "windowProbe": "intraday", // the first read, held until a second prompt confirms it
       "frameHex": "#266ed9",     // last painted color; a mismatch is what triggers a repaint
       "vtSent": "1kf3n",         // digest of the escapes that visibly landed; skips re-delivery
       "frameCleared": true,      // off-repo only: the frame was reset to default already
@@ -140,6 +143,29 @@ inside a Claude Code session, `AURA_SESSION` inside any other agent the shell
 snippet started, `shell-<ppid>` otherwise. A tag is pruned when its session is,
 which is why `writeTag` touches the session entry in the same delta: without
 one, the prune in that very write would drop the tag it just set.
+
+`windowName` is the third identity source and the only automatic one that works
+outside a repo. A Windows Terminal window title is the ACTIVE TAB's name, and a
+tab the user renamed keeps that name for the life of the window, so it names a
+project that no path names. It is read through `frame-win.ps1 -QueryTitle`,
+which costs a PowerShell spawn, so it is read on prompt events only, at most
+TWICE per session, and the answer is cached for the session's life (rule 5 keeps
+spawns off the steady path). The read passes the cached HWND, so a foreground
+window that is not this session's cannot answer for it. Tabs share one HWND, so
+the handle cannot pick a tab: what makes the answer this tab's is the timing.
+The read rides a prompt, and at a prompt the user has just typed here.
+
+The hard part is that a title is not a name unless a person set it. Four guards
+separate the two. A title over 40 characters is prompt text. A title holding
+aura's own `·` separator is aura's. A title holding `/` or `:` is a path a shell
+wrote in, and a title that is a shell's own default (`Windows PowerShell`,
+`cmd.exe`, and the rest of `DEFAULT_TITLES`) names a shell, not a project. What
+survives all four still has to hold still: `settleWindowName` keeps the first
+read as a probe and adopts it only when a second prompt reads the same string,
+because an agent's title follows the prompt while a name does not. Anything else
+caches `""` and is never looked up again. A session that takes its identity from
+the title writes NO `OSC 0`, because renaming the tab would move the color it
+just read. A rename lands on the next session.
 
 `remotes` is a cache, but it is not optional. `resolveIdentity` fills it from a
 second git spawn, and rule 5 allows only one on the prompt path. So the delta
@@ -187,7 +213,7 @@ and 24 forked writers see a median 2 ms wait with no give-ups at all.
 
 Tabs share one window frame, so the frame color is a property of the WINDOW, not of whichever tab wrote last. Two rules settle every conflict:
 
-1. **No repo, no color.** A session outside a git repo writes nothing colored: no background tint, no tab color, no frame. `decideEvent` returns `usesColor: false`, so the hook builds a title-only escape string, and `resetFrame: true`, so the adapter writes `DWMWA_COLOR_DEFAULT` (`-Reset`) once and the window goes back to the terminal's own frame. The reset is marked `frameCleared` on the session, so later prompts stay spawn-free.
+1. **No identity, no color.** A session with no repo, no tag and no tab name writes nothing colored: no background tint, no tab color, no frame. `decideEvent` returns `usesColor: false`, so the hook builds a title-only escape string (or nothing, when it has no title to set either), and `resetFrame: true`, so the adapter writes `DWMWA_COLOR_DEFAULT` (`-Reset`) once and the window goes back to the terminal's own frame. The reset is marked `frameCleared` on the session, so later prompts stay spawn-free.
 2. **A repo session outranks a bare shell.** The reset must never strip a color a repo tab in the same window owns. The hook passes the live repo sessions' HWNDs as `-SkipHwnds` and the adapter re-checks the list AFTER resolving the window, because the handle may not be cached yet. A skipped reset leaves the frame alone.
 3. **A repo session takes its frame back.** If `frameOwner[hwnd]` reads `cleared`, the repo session repaints once (`reclaimFrame`) even when every cached value matches, and that paint writes `frameOwner[hwnd] = sessionId`.
 
@@ -205,7 +231,7 @@ The start-time window is a guess. `GetForegroundWindow()` at SessionStart can la
 colorsFor({ repoId, branch }) -> { hue, tintHex, frameHex, shadeIndex }
 ```
 
-- `repoId`: origin remote URL if the repo has one (so two clones share a color), else the normalized absolute repo root path. Outside any git repo, the normalized cwd is the identity: every window still gets a color, `branch` is null, `shadeIndex` is 0.
+- `repoId`: origin remote URL if the repo has one (so two clones share a color), else the normalized absolute repo root path. Outside any git repo it is `window:<tab name>` when the tab has a usable name, else the normalized cwd; either way `branch` is null and `shadeIndex` is 0. The `window:` prefix is what stops a tab called `aura` landing on the aura repo's hue.
 - `hue = fnv1a(repoId) % 360`.
 - `shadeIndex`: main/master = 0; other branches map to one of 4 discrete shade steps by branch-name hash. Discrete steps keep shades tellable-apart; a continuous scale would not be.
 - `tintHex`: dark background tint, HSL(hue, ~35%, ~13%). Must keep default terminal text readable.
@@ -227,7 +253,7 @@ No network API. The "API" is three OS/CLI surfaces:
 - `hook.js` owns Claude Code integration only: parse stdin JSON, call `mark`, exit 0. It is 29 lines and should stay that size; anything it grows belongs in the core.
 - `bin/aura.js` owns argument parsing for every other caller. Adding a command here must never add a branch inside `mark.js`.
 - `src/shell/` owns the prompt snippets. They are dumb on purpose: detect a changed directory, call the CLI, print what comes back, never crash the prompt.
-- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color and `-Reset` returns the frame to the system default (see Window ownership). `frame-win.ps1` (Win32/DWM) is the v0 adapter.
+- `src/adapters/` owns ALL OS-specific window code. Every adapter implements one interface: paint({foreground | cachedHandle, frameHex}) -> handle, or 0/null when unsupported or rejected. `-NoPaint` resolves the handle without writing a color, `-Reset` returns the frame to the system default (see Window ownership), and `-QueryTitle` prints the title of the cached handle, or of the resolved window when there is none, and writes nothing at all. `frame-win.ps1` (Win32/DWM) is the v0 adapter.
 - `decide.js` owns every what-to-do rule: identity precedence, when to spawn, who paints, who owns a window. It is pure, so the rules are testable without a desktop.
 - `git.js` owns the only git spawns. It reads git's OUTPUT, never its exit code: `git rev-parse --show-toplevel --abbrev-ref HEAD` exits 128 on a repo with no commits yet (unborn HEAD) while still printing a valid toplevel on stdout. Gating on the exit code made every commitless repo look like a bare folder, which after the no-repo-no-color rule meant no color at all (measured 2026-08-30 on `C:/Users/skf_s/bitfall`). A branch line of literally `HEAD` means unborn or detached: a repo, with no branch. `test/git.test.js` drives real repos created with `git init`.
 - `tag.js` owns the session tag: the session key an agent's environment implies, and the read/write of `state.tags`. It also owns `inTerminalSession`, the gate that wants proof of a live terminal before `bin/aura.js` paints anything.
@@ -274,6 +300,10 @@ Rules: a missing frame adapter degrades to tint + title, never errors. iTerm2 ta
 - **Concurrent state writers (design fix 2026-08-31).** One Claude Code session per window wrote state rarely; every open shell writing on every cd does not. Whole-file writes from a stale snapshot would silently drop other windows' entries, and a dropped entry means a lost HWND cache, which means a repaint on the wrong window. Fixed structurally: locked delta writes (see Data Model). The lock alone did not hold, though. A 24-writer race still lost an entry about once in 40 rounds until the rename, the read and the give-up path were each fixed (see Data Model for all three). After that: 200 rounds clean under a concurrent suite load. Regression tests in `test/state.test.js` run 12 concurrent `aura mark` processes, and drive each failure path directly with a fake `renameSync` and `readFileSync`.
 - **A loaded box can read as "not a repo" (observed 2026-08-31).** `runGit` gives git 1500 ms, and under heavy parallel load git exceeded it. The probe then returns null, the identity falls back to the plain cwd, and that prompt gets no color. It self-corrects on the next prompt. The budget stays as it is: a longer one would stall a prompt to fix a case only a saturated machine produces.
 - **MEASURED 2026-08-31: a delivery cache keyed on the color cannot see a change to the escapes.** The tab-color slot moved from 200 to 264 (see the Color Contract). The color that slot carries did not change, so `vtHex` still matched in every open session and not one of them re-sent the new escape string: state.json showed `frameHex` and `vtHex` equal for all live sessions and the adapter never spawned. The key is now `vtSent`, an FNV-1a digest of the escapes actually delivered, with the title excluded because the title moves every prompt and hashing it would spawn PowerShell on the steady-state path (rule 5). Any future change to the escape shape self-invalidates, and the old key never matches the new one, so every open session re-delivers exactly once.
+
+- **MEASURED 2026-08-31: a tag nobody types is not an identity either.** `state.tags` fixed the home-folder case in principle and not in practice: it needs one manual `aura tag <dir>` per session, so after a day of use the live state held exactly ONE tag, set by an agent, and eight tabs still showed two colors. `GetWindowText` on the three live Windows Terminal HWNDs returned `intraday`, `aura` and `fifty` - short, stable names the user had set by renaming the tabs, not prompt text. So the tab name became the third identity source. What it costs: aura stops writing `OSC 0` for those sessions, because the title IS the identity and overwriting it would move the color; and renaming a tab changes its color, which is the honest behaviour for a name-keyed hue. What it does not cost: repos are unaffected, since git still outranks the title.
+
+- **MEASURED 2026-08-31: an un-renamed tab reports the AGENT's title, not a name.** The three readings above came from tabs the user had renamed. `GetWindowText` on a Windows Terminal window whose active tab was NOT renamed returned `✳ Speech cron paused` - Claude Code's own title, built from the session's latest prompt. It is 20 characters, holds no `·`, no path separator, and matches no shell default, so every static guard passed it and it would have become the identity `window:✳ Speech cron paused`. That is the same feedback loop the `·` guard was written for, one writer along. The fix is the only property a name has and a status line does not: it holds still. `settleWindowName` adopts a title only when two different prompts read the same string, which costs a second spawn once per session and nothing after.
 
 - **MEASURED 2026-08-31: the working directory is not an identity.** Six Windows Terminal tabs, six different projects, no color on any of them: every agent had been launched from `C:/Users/skf_s`, which is not a repo, so the no-repo-no-color rule painted nothing and was right to. Coloring the home folder instead would have given six identical tabs, since all six shared that one path. The fix is a second identity source (`state.tags`), not a change to the color rule. A tag also paints as it is written, measured the same day: `aura tag C:/Users/skf_s/bitfall` run from inside a Claude Code tool call turned the tab pixel to `#26D947` and the pane to `#162D1A`, both exactly what `colorsFor` computes for that repo, and tagging back restored `#2662D9` / `#161D2D`. Without that, only Claude Code could ever consume a tag, since no other agent has a prompt hook.
 - **A shell prompt is a hotter path than a hook.** A hook runs once per turn; a prompt function runs on every Enter. The snippet therefore compares `$PWD` to the last marked path FIRST and spawns nothing when it matches, so the node start (~70 ms) is paid on a cd, not on every command. A cd into a different repo also spawns the adapter, which is a PowerShell start; that is the honest worst case and it is once per repo change.

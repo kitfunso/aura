@@ -5,6 +5,7 @@ param(
     [Parameter(Mandatory=$true)][string]$FrameColor,  # RRGGBB, no leading #
     [long]$Hwnd = 0,
     [switch]$NoPaint,          # resolve and report the HWND, but write no color
+    [switch]$QueryTitle,       # print the terminal window title and exit; writes nothing
     [switch]$Reset,            # write DWMWA_COLOR_DEFAULT: back to the system frame
     [string]$SkipHwnds = "",   # -Reset only: comma-joined HWNDs a repo session owns
     [string]$VtB64 = "",
@@ -23,6 +24,7 @@ using System.Runtime.InteropServices;
 public static class AuraFrame {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, System.Text.StringBuilder buf, int max);
     [DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
     [DllImport("kernel32.dll")] static extern bool FreeConsole();
     [DllImport("kernel32.dll")] static extern bool AttachConsole(uint pid);
@@ -70,17 +72,31 @@ if ($VtTargets -ne "") {
 
 $allowedProcs = @("WindowsTerminal", "OpenConsole", "conhost", "wezterm-gui", "alacritty", "ghostty")
 
-$target = [IntPtr]::Zero
-if ($Hwnd -ne 0) {
-    $target = [IntPtr]$Hwnd
-} else {
+function Resolve-TerminalWindow {
     $fg = [AuraFrame]::GetForegroundWindow()
     $procId = [uint32]0
     [void][AuraFrame]::GetWindowThreadProcessId($fg, [ref]$procId)
     $procName = ""
     try { $procName = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch {}
-    if ($allowedProcs -contains $procName) { $target = $fg }
+    if ($allowedProcs -contains $procName) { return $fg }
+    return [IntPtr]::Zero
 }
+
+if ($QueryTitle) {
+    # In Windows Terminal this is the ACTIVE TAB's name. The cached handle wins,
+    # so a foreground window belonging to another app cannot answer for this one.
+    $titleWindow = [IntPtr]::Zero
+    if ($Hwnd -ne 0) { $titleWindow = [IntPtr]$Hwnd } else { $titleWindow = Resolve-TerminalWindow }
+    if ($titleWindow -ne [IntPtr]::Zero) {
+        $buffer = New-Object System.Text.StringBuilder -ArgumentList 256
+        [void][AuraFrame]::GetWindowText($titleWindow, $buffer, $buffer.Capacity)
+        Write-Output $buffer.ToString()
+    }
+    exit 0
+}
+
+$target = [IntPtr]::Zero
+if ($Hwnd -ne 0) { $target = [IntPtr]$Hwnd } else { $target = Resolve-TerminalWindow }
 
 if ($target -ne [IntPtr]::Zero) {
     # The resolved window may differ from the cached one, so the skip list is

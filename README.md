@@ -35,6 +35,8 @@ When a window enters a repo, aura:
    conhost-style terminals the full caption shows.
 4. **Sets the title** to `repo · branch` (best-effort; Claude Code itself
    keeps the latest prompt in the title, which covers "what am I doing here").
+   A session colored by its own tab name is the exception: aura writes no title
+   there, so the name it read stays put.
 
 Three callers, one core. Your shell calls `aura mark` from its prompt when the
 directory changed. Claude Code calls the same core from a hook, which colors a
@@ -43,17 +45,28 @@ it knows a window moved.
 
 Colors are deterministic: the same repo maps to the same hue on every machine,
 every restart. Branches get discrete shades of the repo hue; main/master is
-the base shade. Outside a git repo there is no color: the window keeps your
-terminal's own default.
+the base shade. With no repo, no tag and no tab name there is no color: the
+window keeps your terminal's own default.
 
-So a color means the window is in that repo. It does not mean an agent is
-running in it, and that is the trade for one mechanism every tool gets for free.
+So a color means the window is in that repo, or wears that name. It does not
+mean an agent is running in it, and that is the trade for one mechanism every
+tool gets for free.
 
 ## When the folder is not the project
 
 Agents get launched from a home folder as often as from a checkout, and a home
-folder names no project. So identity has a second source. A tag pins one
-session to a repo, and the tag outranks the working directory:
+folder names no project. Six tabs on six projects then share one path that
+names none of them. So identity has two more sources.
+
+**Your tab name.** Rename a Windows Terminal tab and aura colors it by that
+name, deterministically, the same way it colors a repo. Nothing to run. Tabs you
+have not renamed are left alone, because aura only takes a title that behaves
+like a name: under 40 characters, no path in it, not a shell's own default, and
+unchanged across two prompts. An agent's title moves with every prompt, so it
+never qualifies. A session colored by its tab name keeps that name, because
+writing a new title would change the color it was just read from.
+
+**A tag**, when you want a session to wear a specific repo's color:
 
 ```
 aura tag ~/hippo      # this session is hippo, wherever it sits
@@ -61,7 +74,8 @@ aura tag              # print the current tag
 aura tag --clear      # back to the working directory
 ```
 
-Run it from inside an agent and it tags that agent's own session. The key comes
+A tag outranks both the working directory and the tab name. Run it from inside
+an agent and it tags that agent's own session. The key comes
 from `CLAUDE_CODE_SESSION_ID`, or from `AURA_SESSION`, which the shell snippet
 exports to every process the window starts. The color lands at once, through
 the same path a hook paints on, so an agent with no prompt hook still gets one.

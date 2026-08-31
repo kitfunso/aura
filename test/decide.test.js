@@ -3,7 +3,8 @@ const test = require("node:test");
 const assert = require("node:assert");
 const path = require("path");
 const {
-  identityFrom, decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
+  identityFrom, usableWindowTitle, settleWindowName, decideEvent, hasTerminalMarker,
+  windowHasColoredSession, coloredSessionHwnds,
 } = require("../src/decide.js");
 
 // -- identityFrom: origin remote URL > repo root path > cwd --
@@ -47,7 +48,7 @@ const cachedSession = { hwnd: 853852, frameHex: HEX, vtSent: SIG };
 test("steady state: cached hwnd + matching colors spawn nothing", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(plan.spawnAdapter, false);
   assert.strictEqual(plan.clearHandshake, false);
@@ -57,7 +58,7 @@ test("steady state: cached hwnd + matching colors spawn nothing", () => {
 test("color change re-fires paint and re-marks delivery", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: "#d9266e", vtSignature: OTHER_SIG, isRepo: true,
+    session: cachedSession, frameHex: "#d9266e", vtSignature: OTHER_SIG, hasColor: true,
   });
   assert.strictEqual(plan.spawnAdapter, true);
   assert.strictEqual(plan.markVtSent, true);
@@ -70,7 +71,7 @@ test("color change re-fires paint and re-marks delivery", () => {
 test("regression: SessionStart delays delivery and never marks delivery", () => {
   const plan = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: {}, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(plan.spawnAdapter, true);
   assert.strictEqual(plan.vtDelayMs, 2000);
@@ -83,7 +84,7 @@ test("regression: SessionStart delays delivery and never marks delivery", () => 
 test("regression: SessionStart re-handshakes despite a fully-matching cache", () => {
   const plan = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(plan.clearHandshake, true);
   assert.strictEqual(plan.cachedHwnd, null);
@@ -93,12 +94,12 @@ test("regression: SessionStart re-handshakes despite a fully-matching cache", ()
 test("prompt marks delivery only when delivery is still owed", () => {
   const owed = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(owed.markVtSent, true);
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(settled.markVtSent, false);
 });
@@ -109,7 +110,7 @@ test("prompt marks delivery only when delivery is still owed", () => {
 test("regression: new escapes re-deliver even when the color did not move", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, vtSignature: OTHER_SIG, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: OTHER_SIG, hasColor: true,
   });
   assert.strictEqual(plan.spawnAdapter, true);
   assert.strictEqual(plan.markVtSent, true);
@@ -121,13 +122,13 @@ test("regression: new escapes re-deliver even when the color did not move", () =
 test("regression: the first prompt re-resolves the window, later prompts trust the cache", () => {
   const owed = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: { hwnd: 853852, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: { hwnd: 853852, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(owed.cachedHwnd, null);      // adapter takes the foreground window
   assert.strictEqual(owed.spawnAdapter, true);    // the spawn it rides was happening anyway
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(settled.cachedHwnd, 853852); // steady state stays spawn-free
   assert.strictEqual(settled.spawnAdapter, false);
@@ -136,7 +137,7 @@ test("regression: the first prompt re-resolves the window, later prompts trust t
 test("VT delivery is win32-only; POSIX never owes VT", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "linux",
-    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(plan.spawnAdapter, false);
   assert.strictEqual(plan.markVtSent, false);
@@ -159,7 +160,7 @@ test("terminal markers: every supported terminal opens the gate, headless does n
 test("off-repo sessions use no color at all and reset the frame once", () => {
   const shell = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: false,
+    session: {}, frameHex: HEX, vtSignature: SIG, hasColor: false,
   });
   assert.strictEqual(shell.usesColor, false);
   assert.strictEqual(shell.paintsFrame, false);
@@ -167,7 +168,7 @@ test("off-repo sessions use no color at all and reset the frame once", () => {
   assert.strictEqual(shell.spawnAdapter, true);   // the reset needs one spawn
   const repo = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: true,
+    session: {}, frameHex: HEX, vtSignature: SIG, hasColor: true,
   });
   assert.strictEqual(repo.usesColor, true);
   assert.strictEqual(repo.resetFrame, false);
@@ -177,65 +178,121 @@ test("the off-repo reset happens once, then the prompt path is spawn-free", () =
   const cleared = { hwnd: 853852, frameHex: HEX, vtSent: SIG, frameCleared: true };
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cleared, frameHex: HEX, vtSignature: SIG, isRepo: false,
+    session: cleared, frameHex: HEX, vtSignature: SIG, hasColor: false,
   });
   assert.strictEqual(settled.spawnAdapter, false);
   // a session start re-handshakes, so the reset runs again on the new window
   const restarted = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: cleared, frameHex: HEX, vtSignature: SIG, isRepo: false,
+    session: cleared, frameHex: HEX, vtSignature: SIG, hasColor: false,
   });
   assert.strictEqual(restarted.spawnAdapter, true);
 });
 
 // -- Window-scoped ownership: tabs share one frame --
 
-test("windowHasRepoSession: only a live repo sibling on the SAME window counts", () => {
+test("windowHasColoredSession: only a live repo sibling on the SAME window counts", () => {
   const sessions = {
-    repo: { isRepo: true, hwnd: 853852 },
-    shell: { isRepo: false, hwnd: 853852 },
-    other: { isRepo: true, hwnd: 999 },
-    noHwnd: { isRepo: true },
+    repo: { hasColor: true, hwnd: 853852 },
+    shell: { hasColor: false, hwnd: 853852 },
+    other: { hasColor: true, hwnd: 999 },
+    noHwnd: { hasColor: true },
   };
-  assert.strictEqual(windowHasRepoSession(sessions, 853852, "shell"), true);
-  assert.strictEqual(windowHasRepoSession(sessions, 853852, "repo"), false);   // itself does not count
-  assert.strictEqual(windowHasRepoSession(sessions, 999, "shell"), true);
-  assert.strictEqual(windowHasRepoSession(sessions, 12345, "shell"), false);   // window with no sibling
-  assert.strictEqual(windowHasRepoSession(sessions, null, "shell"), false);
-  assert.strictEqual(windowHasRepoSession({}, 853852, "shell"), false);
+  assert.strictEqual(windowHasColoredSession(sessions, 853852, "shell"), true);
+  assert.strictEqual(windowHasColoredSession(sessions, 853852, "repo"), false);   // itself does not count
+  assert.strictEqual(windowHasColoredSession(sessions, 999, "shell"), true);
+  assert.strictEqual(windowHasColoredSession(sessions, 12345, "shell"), false);   // window with no sibling
+  assert.strictEqual(windowHasColoredSession(sessions, null, "shell"), false);
+  assert.strictEqual(windowHasColoredSession({}, 853852, "shell"), false);
   // hwnd may be a number here and a string there: compare as strings
-  assert.strictEqual(windowHasRepoSession({ r: { isRepo: true, hwnd: "853852" } }, 853852, "x"), true);
+  assert.strictEqual(windowHasColoredSession({ r: { hasColor: true, hwnd: "853852" } }, 853852, "x"), true);
 });
 
-test("repoSessionHwnds: live repo siblings only, deduped, as strings", () => {
+test("coloredSessionHwnds: live repo siblings only, deduped, as strings", () => {
   const sessions = {
-    repo: { isRepo: true, hwnd: 853852 },
-    twin: { isRepo: true, hwnd: "853852" },
-    shell: { isRepo: false, hwnd: 111 },
-    other: { isRepo: true, hwnd: 999 },
-    noHwnd: { isRepo: true },
+    repo: { hasColor: true, hwnd: 853852 },
+    twin: { hasColor: true, hwnd: "853852" },
+    shell: { hasColor: false, hwnd: 111 },
+    other: { hasColor: true, hwnd: 999 },
+    noHwnd: { hasColor: true },
   };
-  assert.deepStrictEqual(repoSessionHwnds(sessions, "shell"), ["853852", "999"]);
-  assert.deepStrictEqual(repoSessionHwnds(sessions, "repo"), ["853852", "999"]);
-  assert.deepStrictEqual(repoSessionHwnds({}, "x"), []);
+  assert.deepStrictEqual(coloredSessionHwnds(sessions, "shell"), ["853852", "999"]);
+  assert.deepStrictEqual(coloredSessionHwnds(sessions, "repo"), ["853852", "999"]);
+  assert.deepStrictEqual(coloredSessionHwnds({}, "x"), []);
 });
 
 test("only repo sessions write the frame color", () => {
   const args = { eventName: "SessionStart", platform: "win32", session: {}, frameHex: HEX, vtSignature: SIG };
-  assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: true })).paintsFrame, true);
-  assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: false })).paintsFrame, false);
+  assert.strictEqual(decideEvent(Object.assign({}, args, { hasColor: true })).paintsFrame, true);
+  assert.strictEqual(decideEvent(Object.assign({}, args, { hasColor: false })).paintsFrame, false);
 });
 
 test("reclaim: a repo session repaints a window a bare shell cleared", () => {
   const session = { hwnd: 853852, frameHex: HEX, vtSent: SIG };
   const held = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, vtSignature: SIG, isRepo: true, windowFrameCleared: true,
+    session, frameHex: HEX, vtSignature: SIG, hasColor: true, windowFrameCleared: true,
   });
   assert.strictEqual(held.spawnAdapter, true);   // takes its color back
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, vtSignature: SIG, isRepo: true, windowFrameCleared: false,
+    session, frameHex: HEX, vtSignature: SIG, hasColor: true, windowFrameCleared: false,
   });
   assert.strictEqual(settled.spawnAdapter, false);   // steady prompt path stays spawn-free
+});
+
+// -- A tab the user named is the third identity source, below git and a tag. --
+test("usableWindowTitle: takes a real tab name, refuses everything else", () => {
+  assert.strictEqual(usableWindowTitle("intraday"), "intraday");
+  assert.strictEqual(usableWindowTitle("  Speech  "), "Speech");
+  assert.strictEqual(usableWindowTitle("two\u0007words"), "two words");
+  assert.strictEqual(usableWindowTitle(""), null);
+  assert.strictEqual(usableWindowTitle("   "), null);
+  assert.strictEqual(usableWindowTitle(null), null);
+  assert.strictEqual(usableWindowTitle(undefined), null);
+  assert.strictEqual(usableWindowTitle("x".repeat(41)), null, "prompt text is not a name");
+  assert.strictEqual(usableWindowTitle("aura · master"), null, "aura's own title never feeds back");
+  assert.strictEqual(usableWindowTitle("C:" + String.fromCharCode(92) + "Users"), null, "a path is not a name");
+  assert.strictEqual(usableWindowTitle("~/hippo"), null, "a path is not a name");
+  assert.strictEqual(usableWindowTitle("Windows PowerShell"), null, "a shell default names no project");
+  assert.strictEqual(usableWindowTitle("cmd.exe"), null);
+});
+
+test("settleWindowName: a title is a name only after two prompts read it the same", () => {
+  const first = settleWindowName(undefined, "intraday");
+  assert.deepStrictEqual(first, { probe: "intraday", name: null }, "one read decides nothing");
+  assert.deepStrictEqual(settleWindowName("intraday", "intraday"), { probe: null, name: "intraday" });
+  // Claude Code rewrites its title every prompt, so the second read moves.
+  assert.deepStrictEqual(settleWindowName("Speech cron paused", "fix the ring"), { probe: null, name: "" });
+  assert.deepStrictEqual(settleWindowName("intraday", null), { probe: null, name: "" });
+  assert.deepStrictEqual(settleWindowName(undefined, null), { probe: null, name: "" }, "no title, no second look");
+});
+
+test("no repo: a named window carries the color, a plain folder still does not", () => {
+  const named = identityFrom({ gitCombined: null, cwd: "C:/Users/skf_s", windowTitle: "intraday" });
+  assert.strictEqual(named.repoId, "window:intraday");
+  assert.strictEqual(named.name, "intraday");
+  assert.strictEqual(named.isRepo, false, "a window title is not a repo");
+  assert.strictEqual(named.hasColor, true);
+  assert.strictEqual(named.fromWindowTitle, true);
+
+  const bare = identityFrom({ gitCombined: null, cwd: "C:/Users/skf_s", windowTitle: "" });
+  assert.strictEqual(bare.hasColor, false);
+  assert.strictEqual(bare.fromWindowTitle, false);
+});
+
+test("a tab named after a repo does not steal that repo's color", () => {
+  const tab = identityFrom({ gitCombined: null, cwd: "C:/tmp", windowTitle: "aura" });
+  const repo = identityFrom({ gitCombined: "C:/Users/skf_s/aura\nmaster", remoteUrl: null, cwd: "C:/Users/skf_s/aura" });
+  assert.notStrictEqual(tab.repoId, repo.repoId);
+});
+
+test("git outranks the window title, and both outrank cwd", () => {
+  const id = identityFrom({
+    gitCombined: "C:/Users/skf_s/aura\nmaster", remoteUrl: null,
+    cwd: "C:/Users/skf_s", windowTitle: "intraday",
+  });
+  assert.strictEqual(id.name, "aura");
+  assert.strictEqual(id.isRepo, true);
+  assert.strictEqual(id.fromWindowTitle, false);
 });

@@ -6,7 +6,8 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 const { colorsFor, fnv1a } = require("./color.js");
 const {
-  decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
+  identityFrom, usableWindowTitle, settleWindowName, isPromptEvent, decideEvent,
+  hasTerminalMarker, windowHasColoredSession, coloredSessionHwnds,
 } = require("./decide.js");
 const { resolveIdentity } = require("./git.js");
 const { readState, updateState, stateFile } = require("./state.js");
@@ -25,7 +26,7 @@ function sanitizeForTitle(text) {
 }
 
 function buildEscapes(colors, title, usesColor, env) {
-  if (!usesColor) return `${ESC}]0;${title}${BEL}`;
+  if (!usesColor) return title ? `${ESC}]0;${title}${BEL}` : "";
   let out = `${ESC}]11;${colors.tintHex}${BEL}`;
   const hex = colors.frameHex;
   if (env.WT_SESSION) {
@@ -42,8 +43,30 @@ function buildEscapes(colors, title, usesColor, env) {
     out += `${ESC}]6;1;bg;green;brightness;${g}${BEL}`;
     out += `${ESC}]6;1;bg;blue;brightness;${b}${BEL}`;
   }
-  out += `${ESC}]0;${title}${BEL}`;
+  if (title) out += `${ESC}]0;${title}${BEL}`;
   return out;
+}
+
+// The tab's own name, read through the same allowlist the frame paint uses. The
+// cached handle is preferred: the foreground window may belong to another tab.
+function queryWindowTitle(env, cachedHwnd) {
+  if (process.platform !== "win32") return null;
+  if (!cachedHwnd && !hasTerminalMarker(env)) return null;
+  const adapter = path.join(__dirname, "adapters", "frame-win.ps1");
+  const args = [
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", adapter,
+    "-FrameColor", "000000", "-QueryTitle",
+  ];
+  if (cachedHwnd) args.push("-Hwnd", String(cachedHwnd));
+  try {
+    return execFileSync("powershell.exe", args, {
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    }).toString().trim() || null;
+  } catch (err) {
+    return null;
+  }
 }
 
 function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, mode, env) {
@@ -96,18 +119,34 @@ function mark({
   // A tag outranks cwd, which carries no project when an agent was launched
   // from a home folder.
   const pinned = (state.tags || {})[sessionId];
-  const identity = resolveIdentity(pinned || cwd, state, eventName === "SessionStart");
+  const session = state.sessions[sessionId] || {};
+  // A tag is an explicit answer, so a tagged session never reads its tab name.
+  const windowName = pinned ? null : session.windowName || null;
+  let identity = resolveIdentity(pinned || cwd, state, eventName === "SessionStart", windowName);
+  if (!identity.hasColor && !pinned && session.windowName === undefined && isPromptEvent(eventName)) {
+    const found = usableWindowTitle(queryWindowTitle(env, session.hwnd));
+    const settled = settleWindowName(session.windowProbe, found);
+    if (settled.probe) session.windowProbe = settled.probe;
+    else {
+      delete session.windowProbe;
+      session.windowName = settled.name;
+    }
+    // git already answered null here, so the name settles it with no second spawn.
+    if (session.windowName) identity = identityFrom({ gitCombined: null, cwd, windowTitle: session.windowName });
+  }
   const colors = colorsFor({ repoId: identity.repoId, branch: identity.branch });
 
   const titleParts = [identity.name];
   if (identity.branch) titleParts.push(identity.branch);
   if (promptText) titleParts.push(sanitizeForTitle(promptText).slice(0, PROMPT_SNIPPET_LEN));
-  const escapes = buildEscapes(colors, titleParts.join(" · "), identity.isRepo, env);
+  // Writing a title over an identity we READ from that title renames it, and
+  // the rename would move the color on the next prompt.
+  const title = identity.fromWindowTitle ? "" : titleParts.join(" · ");
+  const escapes = buildEscapes(colors, title, identity.hasColor, env);
   // The signature covers what was delivered, not just its color, so any change
   // to the escapes re-delivers. The title is out: it moves every prompt.
-  const vtSignature = fnv1a(buildEscapes(colors, "", identity.isRepo, env)).toString(36);
+  const vtSignature = fnv1a(buildEscapes(colors, "", identity.hasColor, env)).toString(36);
 
-  const session = state.sessions[sessionId] || {};
   // A caller that writes to a visible console has already delivered them, so
   // caching here is what keeps the adapter off that caller's prompt path.
   if (!redeliverVt) session.vtSent = vtSignature;
@@ -120,7 +159,7 @@ function mark({
     session,
     frameHex: colors.frameHex,
     vtSignature,
-    isRepo: identity.isRepo,
+    hasColor: identity.hasColor,
     windowFrameCleared: Boolean(session.hwnd && owners[String(session.hwnd)] === "cleared"),
   });
   if (plan.clearHandshake) {
@@ -134,7 +173,7 @@ function mark({
     const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId, sig: vtSignature } : null;
     // The adapter re-checks the list: the window it resolves may not be cached yet.
     const mode = plan.paintsFrame ? { name: "paint" }
-      : plan.resetFrame ? { name: "reset", skipHwnds: repoSessionHwnds(state.sessions, sessionId) }
+      : plan.resetFrame ? { name: "reset", skipHwnds: coloredSessionHwnds(state.sessions, sessionId) }
       : { name: "none" };
     const payload = redeliverVt ? escapes : null;
     const hwnd = paintFrame(colors.frameHex, plan.cachedHwnd, payload, vtDelay, mode, env);
@@ -143,15 +182,16 @@ function mark({
       // Ownership follows the color write, not the handle lookup.
       painted = plan.paintsFrame;
       cleared = mode.name === "reset" &&
-        !windowHasRepoSession(state.sessions, hwnd, sessionId);
+        !windowHasColoredSession(state.sessions, hwnd, sessionId);
       if (cleared) session.frameCleared = true;
       if (plan.markVtSent && redeliverVt) session.vtSent = vtSignature;
     }
   }
   session.repoId = identity.repoId;
   session.branch = identity.branch;
-  // repoId is a path either way, so it cannot tell a repo from a bare shell.
+  // repoId is a path either way, so it cannot tell a colored session from a bare one.
   session.isRepo = identity.isRepo;
+  session.hasColor = identity.hasColor;
   session.frameHex = colors.frameHex;
   if (promptText) session.lastPrompt = sanitizeForTitle(promptText).slice(0, 200);
   session.updatedAt = new Date().toISOString();

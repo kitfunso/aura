@@ -38,3 +38,10 @@ test("a terminal aura cannot color gets the title and nothing else", () => {
   assert.strictEqual(buildEscapes(COLORS, "aura", false, { WT_SESSION: "1" }),
     ESC + "]0;aura" + BEL);
 });
+
+test("an empty title writes no title escape, so a named window keeps its name", () => {
+  const out = buildEscapes(COLORS, "", true, { WT_SESSION: "1" });
+  assert.ok(!out.includes(ESC + "]0;"), "no OSC 0 when there is no title to set");
+  assert.ok(out.includes(ESC + "]11;#161d2d" + BEL), "the tint still lands");
+  assert.strictEqual(buildEscapes(COLORS, "", false, {}), "", "no color and no title is no output");
+});

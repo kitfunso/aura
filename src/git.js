@@ -18,7 +18,7 @@ function runGit(cwd, args) {
 }
 
 // One git spawn on the hot path; the remote URL is cached per repo root.
-function resolveIdentity(cwd, state, recheckNullRemote) {
+function resolveIdentity(cwd, state, recheckNullRemote, windowTitle) {
   const combined = runGit(cwd, ["rev-parse", "--show-toplevel", "--abbrev-ref", "HEAD"]);
   let remoteUrl = null;
   if (combined) {
@@ -33,7 +33,7 @@ function resolveIdentity(cwd, state, recheckNullRemote) {
   }
   // The caller persists remoteUrl under root: without it every prompt pays a
   // second git spawn to re-learn the same URL.
-  return Object.assign(identityFrom({ gitCombined: combined, remoteUrl, cwd }), { remoteUrl });
+  return Object.assign(identityFrom({ gitCombined: combined, remoteUrl, cwd, windowTitle }), { remoteUrl });
 }
 
 module.exports = { runGit, resolveIdentity };
