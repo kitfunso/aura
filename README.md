@@ -127,9 +127,9 @@ The design is shaped by four findings, all measured live on 2026-08-30
   prompt time, allowlisted to terminal processes, and caches the HWND.
 - **Claude Code rewrites the terminal title continuously**, so a
   nonce-title handshake is impossible and aura's title is best-effort.
-- **Tab color needs the DECAC escape** (`OSC 4;200;rgb:RR/GG/BB` +
-  `ESC[2;15;200,|`). The extended palette slot 262 from the WT tab-color PR
-  recolors the pane background on current builds, not the tab.
+- **Tab color needs the DECAC escape** (`OSC 4;264;rgb:RR/GG/BB` +
+  `ESC[2;15;264,|`). Slot 264 sits above the 256-color text palette, so your
+  text keeps its own colors; aura only moves the background and the frame.
 
 The shell path dodges the first of those: a shell prompt owns a visible
 console, so `aura mark --write` puts the escapes there itself and needs no

@@ -17,6 +17,15 @@ function snippetFor(shell, dir) {
   return file;
 }
 
+// The harness spawns the real CLI, so without this it paints the developer's
+// own window and its delayed adapter races the state this test reads.
+function noTerminal() {
+  const env = Object.assign({}, process.env);
+  ["WT_SESSION", "WEZTERM_PANE", "ALACRITTY_WINDOW_ID", "GHOSTTY_RESOURCES_DIR",
+    "TERM_PROGRAM"].forEach(function (name) { delete env[name]; });
+  return env;
+}
+
 // Which separator a shell reports is its business; the directory is the claim.
 function sameDir(a, b) {
   return path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
@@ -56,7 +65,8 @@ test("the powershell prompt wrapper marks, keeps the old prompt, and wraps once"
       const out = path.join(dir, "result.json");
       execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", HARNESS,
         "-Snippet", snippet, "-RepoA", repoA, "-RepoB", repoB,
-        "-StateHome", stateHome, "-OutFile", out], { stdio: ["ignore", "ignore", "pipe"] });
+        "-StateHome", stateHome, "-OutFile", out],
+        { stdio: ["ignore", "ignore", "pipe"], env: noTerminal() });
 
       // PowerShell 5.1 puts a BOM on everything it writes.
       const result = JSON.parse(fs.readFileSync(out, "utf8").replace(/^﻿/, ""));

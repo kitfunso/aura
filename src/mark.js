@@ -14,9 +14,9 @@ const { readState, updateState, stateFile } = require("./state.js");
 const ESC = "\u001b";
 const BEL = "\u0007";
 const PROMPT_SNIPPET_LEN = 60;
-// Palette slot redefined to carry the tab RGB, then selected with DECAC.
-// Slot 262 recolors the pane background on Windows Terminal stable; keep 200.
-const TAB_COLOR_SLOT = 200;
+// Palette slot redefined to carry the tab RGB, then selected with DECAC. It sits
+// above 255 so aura never repaints an index text can be printed in.
+const TAB_COLOR_SLOT = 264;
 
 // Prompt text lands inside an escape sequence: strip control bytes so it can
 // never terminate or inject a sequence of its own.
