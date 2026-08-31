@@ -10,8 +10,9 @@ param(
     [string]$VtB64 = "",
     [int]$VtDelayMs = 0,       # >0: hand targets to a delayed hidden writer instead of writing now
     [string]$VtTargets = "",   # delayed-writer mode: comma-joined attach-target PIDs, topmost first
-    [string]$StateFile = "",   # delayed-writer mode: state.json path for the vtHex skip check
-    [string]$SessionId = ""    # delayed-writer mode: which session's vtHex to check
+    [string]$StateFile = "",   # delayed-writer mode: state.json path for the delivery skip check
+    [string]$SessionId = "",   # delayed-writer mode: which session to check
+    [string]$VtSig = ""        # delayed-writer mode: signature a prompt would have recorded
 )
 $ErrorActionPreference = "Stop"
 
@@ -55,7 +56,7 @@ if ($VtTargets -ne "") {
         try {
             $state = Get-Content -Raw -LiteralPath $StateFile | ConvertFrom-Json
             $sess = $state.sessions.$SessionId
-            if ($sess -and $sess.vtHex -eq ("#" + $FrameColor.ToLower())) { exit 0 }
+            if ($sess -and $VtSig -ne "" -and $sess.vtSent -eq $VtSig) { exit 0 }
         } catch {}
     }
     try {

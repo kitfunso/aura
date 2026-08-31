@@ -4,7 +4,7 @@
 // Rules and measurements: docs/ARCHITECTURE.md.
 const path = require("path");
 const { execFileSync } = require("child_process");
-const { colorsFor } = require("./color.js");
+const { colorsFor, fnv1a } = require("./color.js");
 const {
   decideEvent, hasTerminalMarker, windowHasRepoSession, repoSessionHwnds,
 } = require("./decide.js");
@@ -69,6 +69,7 @@ function paintFrame(frameHex, cachedHwnd, vtPayload, vtDelay, mode, env) {
       args.push("-VtDelayMs", String(vtDelay.ms));
       args.push("-StateFile", stateFile());
       args.push("-SessionId", vtDelay.sessionId);
+      args.push("-VtSig", vtDelay.sig);
     }
   }
   try {
@@ -102,11 +103,14 @@ function mark({
   if (identity.branch) titleParts.push(identity.branch);
   if (promptText) titleParts.push(sanitizeForTitle(promptText).slice(0, PROMPT_SNIPPET_LEN));
   const escapes = buildEscapes(colors, titleParts.join(" · "), identity.isRepo, env);
+  // The signature covers what was delivered, not just its color, so any change
+  // to the escapes re-delivers. The title is out: it moves every prompt.
+  const vtSignature = fnv1a(buildEscapes(colors, "", identity.isRepo, env)).toString(36);
 
   const session = state.sessions[sessionId] || {};
   // A caller that writes to a visible console has already delivered them, so
   // caching here is what keeps the adapter off that caller's prompt path.
-  if (!redeliverVt) session.vtHex = colors.frameHex;
+  if (!redeliverVt) session.vtSent = vtSignature;
   session.tty = sink(escapes);
 
   const owners = state.frameOwner || {};
@@ -115,18 +119,19 @@ function mark({
     platform: process.platform,
     session,
     frameHex: colors.frameHex,
+    vtSignature,
     isRepo: identity.isRepo,
     windowFrameCleared: Boolean(session.hwnd && owners[String(session.hwnd)] === "cleared"),
   });
   if (plan.clearHandshake) {
     delete session.hwnd;
-    delete session.vtHex;
+    delete session.vtSent;
     delete session.frameCleared;
   }
   let painted = false;
   let cleared = false;
   if (plan.spawnAdapter) {
-    const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId } : null;
+    const vtDelay = plan.vtDelayMs > 0 ? { ms: plan.vtDelayMs, sessionId, sig: vtSignature } : null;
     // The adapter re-checks the list: the window it resolves may not be cached yet.
     const mode = plan.paintsFrame ? { name: "paint" }
       : plan.resetFrame ? { name: "reset", skipHwnds: repoSessionHwnds(state.sessions, sessionId) }
@@ -140,7 +145,7 @@ function mark({
       cleared = mode.name === "reset" &&
         !windowHasRepoSession(state.sessions, hwnd, sessionId);
       if (cleared) session.frameCleared = true;
-      if (plan.markVtHex && redeliverVt) session.vtHex = colors.frameHex;
+      if (plan.markVtSent && redeliverVt) session.vtSent = vtSignature;
     }
   }
   session.repoId = identity.repoId;

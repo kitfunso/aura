@@ -41,14 +41,14 @@ function windowHasRepoSession(sessions, hwnd, exceptSessionId) {
   return repoSessionHwnds(sessions, exceptSessionId).indexOf(String(hwnd)) !== -1;
 }
 
-function decideEvent({ eventName, platform, session, frameHex, isRepo, windowFrameCleared }) {
+function decideEvent({ eventName, platform, session, frameHex, vtSignature, isRepo, windowFrameCleared }) {
   // "prompt" is the shell caller's name for the same thing: the window is
   // already up, so there is no TUI init race to wait out.
   const isPrompt = eventName === "UserPromptSubmit" || eventName === "prompt";
   // A session start may land in a new tab or window, so it re-handshakes.
   const clearHandshake = !isPrompt;
-  const cachedVtHex = clearHandshake ? undefined : session.vtHex;
-  const needsVtDelivery = platform === "win32" && cachedVtHex !== frameHex;
+  const cachedVtSent = clearHandshake ? undefined : session.vtSent;
+  const needsVtDelivery = platform === "win32" && cachedVtSent !== vtSignature;
   // The start-time window is a guess (the user may be looking elsewhere); the
   // first prompt proves which window is theirs, and already spawns for VT.
   const reresolveWindow = isPrompt && needsVtDelivery;
@@ -65,7 +65,7 @@ function decideEvent({ eventName, platform, session, frameHex, isRepo, windowFra
     spawnAdapter: needsFrame || needsVtDelivery,
     // An immediate start-time write races Claude Code's TUI init and is wiped.
     vtDelayMs: isPrompt ? 0 : 2000,
-    markVtHex: isPrompt && needsVtDelivery,
+    markVtSent: isPrompt && needsVtDelivery,
     // No repo, no color: the window keeps the terminal's own default.
     paintsFrame: isRepo,
     resetFrame: !isRepo,

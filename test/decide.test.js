@@ -38,12 +38,16 @@ test("identity: cwd fallback outside any repo", () => {
 // -- decideEvent: the steady-state ~70 ms path --
 
 const HEX = "#266ed9";
-const cachedSession = { hwnd: 853852, frameHex: HEX, vtHex: HEX };
+// The delivery cache keys on the escapes sent, not on their color, so a change
+// to the escape shape re-delivers on its own.
+const SIG = "1kf3n";
+const OTHER_SIG = "9zq2b";
+const cachedSession = { hwnd: 853852, frameHex: HEX, vtSent: SIG };
 
 test("steady state: cached hwnd + matching colors spawn nothing", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(plan.spawnAdapter, false);
   assert.strictEqual(plan.clearHandshake, false);
@@ -53,65 +57,77 @@ test("steady state: cached hwnd + matching colors spawn nothing", () => {
 test("color change re-fires paint and re-marks delivery", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: "#d9266e", isRepo: true,
+    session: cachedSession, frameHex: "#d9266e", vtSignature: OTHER_SIG, isRepo: true,
   });
   assert.strictEqual(plan.spawnAdapter, true);
-  assert.strictEqual(plan.markVtHex, true);
+  assert.strictEqual(plan.markVtSent, true);
   assert.strictEqual(plan.vtDelayMs, 0);
 });
 
 // -- Measured traps (ARCHITECTURE.md Known Risks). Trap 1: a SessionStart VT
-// write races Claude Code's TUI init, so it delays and never marks vtHex. --
+// write races Claude Code's TUI init, so it delays and never marks delivery. --
 
-test("regression: SessionStart delays delivery and never marks vtHex", () => {
+test("regression: SessionStart delays delivery and never marks delivery", () => {
   const plan = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: {}, frameHex: HEX, isRepo: true,
+    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(plan.spawnAdapter, true);
   assert.strictEqual(plan.vtDelayMs, 2000);
-  assert.strictEqual(plan.markVtHex, false);
+  assert.strictEqual(plan.markVtSent, false);
 });
 
 // -- Trap 2: a resumed session can land in a brand-new tab or window, so
-// SessionStart drops the cached hwnd + vtHex even when they still match. --
+// SessionStart drops the cached hwnd + delivery mark even when they still match. --
 
 test("regression: SessionStart re-handshakes despite a fully-matching cache", () => {
   const plan = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: cachedSession, frameHex: HEX, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(plan.clearHandshake, true);
   assert.strictEqual(plan.cachedHwnd, null);
   assert.strictEqual(plan.spawnAdapter, true);
 });
 
-test("prompt marks vtHex only when delivery is still owed", () => {
+test("prompt marks delivery only when delivery is still owed", () => {
   const owed = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, isRepo: true,
+    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
-  assert.strictEqual(owed.markVtHex, true);
+  assert.strictEqual(owed.markVtSent, true);
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
-  assert.strictEqual(settled.markVtHex, false);
+  assert.strictEqual(settled.markVtSent, false);
 });
 
-// -- Trap 3: the start-time foreground window is a guess (five windows once
+// -- Trap 3: the cache used to key on the color, so changing the escapes
+// without changing the color left every open session silently stale. --
+
+test("regression: new escapes re-deliver even when the color did not move", () => {
+  const plan = decideEvent({
+    eventName: "UserPromptSubmit", platform: "win32",
+    session: cachedSession, frameHex: HEX, vtSignature: OTHER_SIG, isRepo: true,
+  });
+  assert.strictEqual(plan.spawnAdapter, true);
+  assert.strictEqual(plan.markVtSent, true);
+});
+
+// -- Trap 4: the start-time foreground window is a guess (five windows once
 // shared one cached HWND), so the first prompt re-resolves the handle. --
 
 test("regression: the first prompt re-resolves the window, later prompts trust the cache", () => {
   const owed = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: { hwnd: 853852, frameHex: HEX }, frameHex: HEX, isRepo: true,
+    session: { hwnd: 853852, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(owed.cachedHwnd, null);      // adapter takes the foreground window
   assert.strictEqual(owed.spawnAdapter, true);    // the spawn it rides was happening anyway
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cachedSession, frameHex: HEX, isRepo: true,
+    session: cachedSession, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(settled.cachedHwnd, 853852); // steady state stays spawn-free
   assert.strictEqual(settled.spawnAdapter, false);
@@ -120,10 +136,10 @@ test("regression: the first prompt re-resolves the window, later prompts trust t
 test("VT delivery is win32-only; POSIX never owes VT", () => {
   const plan = decideEvent({
     eventName: "UserPromptSubmit", platform: "linux",
-    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, isRepo: true,
+    session: { hwnd: 1, frameHex: HEX }, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(plan.spawnAdapter, false);
-  assert.strictEqual(plan.markVtHex, false);
+  assert.strictEqual(plan.markVtSent, false);
 });
 
 // -- Terminal markers: the first-paint gate (broadened from WT_SESSION-only
@@ -143,7 +159,7 @@ test("terminal markers: every supported terminal opens the gate, headless does n
 test("off-repo sessions use no color at all and reset the frame once", () => {
   const shell = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: {}, frameHex: HEX, isRepo: false,
+    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: false,
   });
   assert.strictEqual(shell.usesColor, false);
   assert.strictEqual(shell.paintsFrame, false);
@@ -151,23 +167,23 @@ test("off-repo sessions use no color at all and reset the frame once", () => {
   assert.strictEqual(shell.spawnAdapter, true);   // the reset needs one spawn
   const repo = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: {}, frameHex: HEX, isRepo: true,
+    session: {}, frameHex: HEX, vtSignature: SIG, isRepo: true,
   });
   assert.strictEqual(repo.usesColor, true);
   assert.strictEqual(repo.resetFrame, false);
 });
 
 test("the off-repo reset happens once, then the prompt path is spawn-free", () => {
-  const cleared = { hwnd: 853852, frameHex: HEX, vtHex: HEX, frameCleared: true };
+  const cleared = { hwnd: 853852, frameHex: HEX, vtSent: SIG, frameCleared: true };
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session: cleared, frameHex: HEX, isRepo: false,
+    session: cleared, frameHex: HEX, vtSignature: SIG, isRepo: false,
   });
   assert.strictEqual(settled.spawnAdapter, false);
   // a session start re-handshakes, so the reset runs again on the new window
   const restarted = decideEvent({
     eventName: "SessionStart", platform: "win32",
-    session: cleared, frameHex: HEX, isRepo: false,
+    session: cleared, frameHex: HEX, vtSignature: SIG, isRepo: false,
   });
   assert.strictEqual(restarted.spawnAdapter, true);
 });
@@ -205,21 +221,21 @@ test("repoSessionHwnds: live repo siblings only, deduped, as strings", () => {
 });
 
 test("only repo sessions write the frame color", () => {
-  const args = { eventName: "SessionStart", platform: "win32", session: {}, frameHex: HEX };
+  const args = { eventName: "SessionStart", platform: "win32", session: {}, frameHex: HEX, vtSignature: SIG };
   assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: true })).paintsFrame, true);
   assert.strictEqual(decideEvent(Object.assign({}, args, { isRepo: false })).paintsFrame, false);
 });
 
 test("reclaim: a repo session repaints a window a bare shell cleared", () => {
-  const session = { hwnd: 853852, frameHex: HEX, vtHex: HEX };
+  const session = { hwnd: 853852, frameHex: HEX, vtSent: SIG };
   const held = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, isRepo: true, windowFrameCleared: true,
+    session, frameHex: HEX, vtSignature: SIG, isRepo: true, windowFrameCleared: true,
   });
   assert.strictEqual(held.spawnAdapter, true);   // takes its color back
   const settled = decideEvent({
     eventName: "UserPromptSubmit", platform: "win32",
-    session, frameHex: HEX, isRepo: true, windowFrameCleared: false,
+    session, frameHex: HEX, vtSignature: SIG, isRepo: true, windowFrameCleared: false,
   });
   assert.strictEqual(settled.spawnAdapter, false);   // steady prompt path stays spawn-free
 });
