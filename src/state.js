@@ -7,7 +7,9 @@ const path = require("path");
 
 const STALE_MS = 48 * 60 * 60 * 1000;
 const LOCK_STALE_MS = 5000;
-const LOCK_WAIT_MS = 200;
+// Must outlast one worst-case holder (a contended rename, RENAME_WAIT_MS, plus
+// its write) or a single slow rename starves every waiter. Rest is queue room.
+const LOCK_WAIT_MS = 400;
 const LOCK_SLICE_MS = 5;
 const RENAME_WAIT_MS = 250;
 const RENAME_SLICE_MS = 5;

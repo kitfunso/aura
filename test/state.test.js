@@ -1,7 +1,7 @@
 "use strict";
-// The whole point of the lock: many shells mark at once, and each one rewrites
-// the entire file. Without a locked delta the last writer wins and the rest of
-// the sessions vanish, taking their cached HWNDs with them.
+// Many shells mark at once and each rewrites the whole file, so a delta lands
+// under a lock or the last writer wins. Losing the lock race is allowed:
+// mark paints BEFORE it writes, so a dropped write costs only a cache entry.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("fs");
@@ -19,7 +19,7 @@ function markAsync(cwd, sessionId, env) {
   });
 }
 
-test("concurrent writers all survive", async () => {
+test("concurrent writers never clobber a session already in the file", async () => {
   const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-race-"));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "aura-race-repo-"));
   execFileSync("git", ["-C", dir, "init"], { stdio: "ignore" });
@@ -29,14 +29,29 @@ test("concurrent writers all survive", async () => {
   });
   delete env.WT_SESSION;
   try {
+    const file = path.join(stateHome, "aura", "state.json");
+    // Seeded first, so survival cannot depend on winning a wall-clock race for
+    // the lock. A bystander is exactly what last-writer-wins destroys.
+    const bystanders = {};
+    for (let i = 0; i < 6; i++) {
+      bystanders["shell-bystander-" + i] = { updatedAt: new Date().toISOString(), isRepo: false };
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ sessions: bystanders }, null, 2));
+
     const ids = [];
     for (let i = 0; i < WRITERS; i++) ids.push("shell-race-" + i);
     await Promise.all(ids.map(function (id) { return markAsync(dir, id, env); }));
 
-    const file = path.join(stateHome, "aura", "state.json");
     const state = JSON.parse(fs.readFileSync(file, "utf8"));
-    const missing = ids.filter(function (id) { return !state.sessions[id]; });
-    assert.deepStrictEqual(missing, [], "no session entry was overwritten away");
+    const lost = Object.keys(bystanders).filter(function (id) { return !state.sessions[id]; });
+    assert.deepStrictEqual(lost, [], "a writer overwrote a session that was already there");
+
+    const landed = ids.filter(function (id) { return state.sessions[id]; });
+    assert.ok(landed.length > 0, "contention blocked every single write");
+    // A half-applied delta is the other shape of the same bug.
+    const partial = landed.filter(function (id) { return !state.sessions[id].repoId; });
+    assert.deepStrictEqual(partial, [], "a landed entry was written without its identity");
     assert.ok(!fs.existsSync(file + ".lock"), "the lock is released");
   } finally {
     fs.rmSync(stateHome, { recursive: true, force: true });
