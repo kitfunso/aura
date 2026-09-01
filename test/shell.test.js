@@ -26,9 +26,23 @@ function noTerminal() {
   return env;
 }
 
-// Which separator a shell reports is its business; the directory is the claim.
+// A CI runner hands out TEMP as an 8.3 short path, PowerShell reports the long
+// form back, and only realpath reconciles the two into one directory.
+function realDir(p) {
+  try {
+    return fs.realpathSync.native(String(p));
+  } catch (err) {
+    return path.resolve(String(p));
+  }
+}
+
 function sameDir(a, b) {
-  return path.resolve(String(a)).toLowerCase() === path.resolve(String(b)).toLowerCase();
+  return realDir(a).toLowerCase() === realDir(b).toLowerCase();
+}
+
+// A failure here lands on a machine I do not own, so it carries both paths.
+function dirsWere(a, b) {
+  return String(a) + " vs " + String(b);
 }
 
 function makeRepo(dir, name) {
@@ -71,14 +85,16 @@ test("the powershell prompt wrapper marks, keeps the old prompt, and wraps once"
       // PowerShell 5.1 puts a BOM on everything it writes.
       const result = JSON.parse(fs.readFileSync(out, "utf8").replace(/^﻿/, ""));
       assert.strictEqual(result.promptText, "ORIGINAL> ", "the shell's own prompt still runs");
-      assert.strictEqual(sameDir(result.lastPath, repoB), true, "the wrapper tracked the last cd");
+      assert.strictEqual(sameDir(result.lastPath, repoB), true,
+        "the wrapper tracked the last cd: " + dirsWere(result.lastPath, repoB));
       assert.strictEqual(result.wrapCount, 1, "re-sourcing the profile did not wrap twice");
 
       const state = JSON.parse(fs.readFileSync(path.join(stateHome, "aura", "state.json"), "utf8"));
       const sessions = Object.keys(state.sessions);
       assert.strictEqual(sessions.length, 1, "one shell, one session entry");
       assert.match(sessions[0], /^shell-\d+-\d+$/, "the session id carries pid and start second");
-      assert.strictEqual(sameDir(state.sessions[sessions[0]].repoId, repoB), true);
+      assert.strictEqual(sameDir(state.sessions[sessions[0]].repoId, repoB), true,
+        "state carries the last repo: " + dirsWere(state.sessions[sessions[0]].repoId, repoB));
       assert.strictEqual(state.sessions[sessions[0]].isRepo, true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
