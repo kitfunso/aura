@@ -288,10 +288,25 @@ reading the reply off the tty, or dropping the "restore only what aura set"
 guarantee on SessionStart. Both are design calls, not patches.
 
 On iTerm2 the tab color is given back with `OSC 6;1;bg;*;default`, the one reset
-iTerm2 documents for the three setters aura writes
-(https://iterm2.com/documentation-escape-codes.html, "To reset the window title
-and tab color"). Nobody on this box runs iTerm2, so it is covered by a unit test
-on the bytes and not by pixels.
+iTerm2 documents for the three setters aura writes. Nobody on this box runs
+iTerm2, so it is covered by a unit test on the bytes and not by pixels.
+
+A unit test on bytes only proves the bytes match what we wrote. So on 2026-09-01
+every part of the path was checked against iTerm2's own documents instead, and it
+matches:
+
+| Part | aura sends | iTerm2 documents |
+|---|---|---|
+| gate | `TERM_PROGRAM === "iTerm.app"` | the standard way a shell detects iTerm2 |
+| set | `OSC 6;1;bg;red\|green\|blue;brightness;N` | same shape, `N` decimal 0-255 |
+| reset | `OSC 6;1;bg;*;default` | same |
+| terminator | `BEL` (0x07) | "`ST` means either `BEL` (hex code 0x07) or `ESC \`" |
+
+Escape shapes and the `ST` definition: https://iterm2.com/documentation-escape-codes.html
+The `TERM_PROGRAM` value: https://groups.google.com/g/iterm2-discuss/c/MpOWDIn6QTs
+
+One thing stays unproven, and desk work cannot close it: whether a real iTerm2
+tab repaints. That needs a Mac.
 
 ### Silence is not an answer
 
