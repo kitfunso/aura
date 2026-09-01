@@ -292,16 +292,26 @@ iTerm2 documents for the three setters aura writes. Nobody on this box runs
 iTerm2, so it is covered by a unit test on the bytes and not by pixels.
 
 A unit test on bytes only proves the bytes match what we wrote. So on 2026-09-01
-every part of the path was checked against iTerm2's own documents instead, and it
-matches:
+the path was checked against iTerm2's own parser, `sources/VT100/VT100Terminal.m`
+in gnachman/iTerm2, which is the code that will actually read these bytes:
 
-| Part | aura sends | iTerm2 documents |
+| Part | aura sends | iTerm2's parser |
 |---|---|---|
 | gate | `TERM_PROGRAM === "iTerm.app"` | the standard way a shell detects iTerm2 |
-| set | `OSC 6;1;bg;red\|green\|blue;brightness;N` | same shape, `N` decimal 0-255 |
-| reset | `OSC 6;1;bg;*;default` | same |
+| set | `OSC 6;1;bg;red\|green\|blue;brightness;N` | `class` must be `bg`, `attribute` must be `brightness` |
+| value | decimal 0-255, from `parseInt(hex, 16)` | "legal values: decimal integers in 0-255", read as `MIN(1, [value intValue] / 255.0)` |
+| reset | `OSC 6;1;bg;*;default` | the only 4-argument form it accepts |
 | terminator | `BEL` (0x07) | "`ST` means either `BEL` (hex code 0x07) or `ESC \`" |
 
+**`bg` here does not mean the window background. Do not "fix" it to OSC 11.**
+The name is inherited from Eterm, but every branch in that parser dispatches to
+a tab-colour method: the three setters call
+`terminalSetTabColor{Red,Green,Blue}ComponentTo:` and the reset calls
+`terminalSetCurrentTabColor:nil`. So on iTerm2 the two colours split the same
+way they do on Windows Terminal, with OSC 11 tinting the background and OSC 6
+colouring the tab chrome.
+
+Parser: https://github.com/gnachman/iTerm2/blob/master/sources/VT100/VT100Terminal.m
 Escape shapes and the `ST` definition: https://iterm2.com/documentation-escape-codes.html
 The `TERM_PROGRAM` value: https://groups.google.com/g/iterm2-discuss/c/MpOWDIn6QTs
 
