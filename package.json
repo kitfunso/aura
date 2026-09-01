@@ -35,6 +35,9 @@
     "terminal",
     "colors",
     "windows-terminal",
+    "iterm2",
+    "macos",
+    "cross-platform",
     "hooks"
   ]
 }

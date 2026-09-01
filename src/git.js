@@ -4,8 +4,8 @@ const { execFileSync } = require("child_process");
 const { identityFrom } = require("./decide.js");
 
 const GIT_TIMEOUT_MS = 1500;
-// A spawn we killed said nothing. git exiting 128 IS an answer, and so is a
-// missing git, so only this case may keep the identity a window already has.
+// A spawn we killed does not answer, even if it printed. git exiting 128 IS an
+// answer, and so is a missing git: only a kill keeps the identity a window has.
 const NO_ANSWER = Object.freeze({ noAnswer: true });
 
 // The output decides, never the exit code: rev-parse exits 128 on a repo with
@@ -17,10 +17,11 @@ function runGit(cwd, args, timeoutMs) {
       stdio: ["ignore", "pipe", "ignore"],
     }).toString().trim() || null;
   } catch (err) {
+    // Killed outranks printed: a reaped spawn still hands back whatever it
+    // printed first, so reading stdout first reads a half answer as a whole one.
+    if (err && (err.code === "ETIMEDOUT" || err.signal === "SIGTERM")) return NO_ANSWER;
     const partial = err && err.stdout ? err.stdout.toString().trim() : "";
-    if (partial) return partial;
-    const killed = err && (err.code === "ETIMEDOUT" || err.signal === "SIGTERM");
-    return killed ? NO_ANSWER : null;
+    return partial || null;
   }
 }
 

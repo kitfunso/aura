@@ -326,7 +326,19 @@ that missed its deadline under load read as "this window left its repo" and the
 restore fired: a colored window flashed back to the terminal default, then
 colored again on the next prompt. Measured discriminator: a real answer always
 carries a numeric `status`; a killed spawn carries `status: null`,
-`signal: SIGTERM`, `code: ETIMEDOUT` and empty stdout.
+`signal: SIGTERM` and `code: ETIMEDOUT`.
+
+A killed spawn does NOT carry empty stdout, which is the trap. `execFileSync`
+hands back everything the child printed before the kill, on Windows and on
+POSIX alike (measured 2026-09-01, both platforms:
+`code=ETIMEDOUT signal=SIGTERM status=null stdout="printed-before-kill"`). So
+the kill flags have to be read BEFORE stdout. Reading stdout first accepts a
+truncated `rev-parse` as a whole answer, and a toplevel with its branch line cut
+off is a repo with no branch, which silently moves the shade.
+
+This surfaced as an OS split and is not one. The same test passed on Windows and
+failed 5 runs in 6 on Linux only because git on a tmpfs beat the 1500 ms
+deadline to its first write more often. Same API, different speed.
 
 `runGit` now returns a `NO_ANSWER` sentinel for a killed spawn only. A missing
 git still returns `null`, because "there is no git here" IS an answer and a box
@@ -379,11 +391,25 @@ The core (color.js, mark.js, decide.js, tty.js, state.js) is OS-neutral, and so 
 |---|---|---|---|---|
 | Windows 11 + Windows Terminal | yes | yes | DECAC + OSC 4, WT 1.15+ (PR microsoft/terminal#13058) | v0: DWM adapter |
 | macOS iTerm2 | yes | yes | iTerm2 `OSC 6;1;bg` escapes | later: overlay adapter (macOS has no API to recolor another app's frame; overlay needs Accessibility permission - Lane B technique) |
-| macOS stock Terminal | unverified | yes | - | same overlay adapter |
+| macOS stock Terminal | emitted; rendering unverified (no Mac on the bench) | yes | - | same overlay adapter |
 | Linux X11 (VTE terminals) | yes | yes | - | later: overlay or WM rule |
 | Linux Wayland | yes | yes | - | hard (compositor-gated); tint + title carry identity |
 
 Rules: a missing frame adapter degrades to tint + title, never errors. iTerm2 tab color is emitted only when `TERM_PROGRAM=iTerm.app`. iTerm2 escape reference: https://iterm2.com/documentation-escape-codes.html
+
+### Which shell profile each OS gets
+
+`install --shell` writes to the file that shell actually reads: `$PROFILE` for PowerShell (asked of powershell.exe, because Documents is often redirected), `~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, and the first of `~/.bash_profile`, `~/.bash_login`, `~/.profile` for bash on macOS. macOS terminals start bash as a LOGIN shell, and a login shell reads `.bash_profile` and never `.bashrc` (GNU bash manual, "Bash Startup Files"). Writing `~/.bashrc` there installs a snippet that never runs. `bin/aura.js shell-init` defaults to zsh on darwin for the same reason: macOS has shipped zsh as the login shell since Catalina.
+
+### How the macOS claim is verified without a Mac
+
+There is no `darwin` branch anywhere in `src/`. Every non-win32 path is shared, so Linux exercises the code macOS runs, and the parts that ARE macOS-specific are environment-driven (`TERM_PROGRAM=iTerm.app`) or platform-string-driven (`bashProfile`), both fakeable in a test. Three things carry the claim:
+
+1. `test/cli.test.js` runs the real CLI with `TERM_PROGRAM=iTerm.app` and asserts the tint, three `OSC 6` tab-color escapes, the title and the restore. It skips on Windows only, where iTerm2 does not exist and the marker would let the adapter paint the developer's own window.
+2. `test/install.test.js` fakes `process.platform` to `darwin` and asserts `bashProfile()` picks a login-shell profile, and to `linux` for `~/.bashrc`.
+3. `.github/workflows/test.yml` runs the suite on `macos-latest` as well as `windows-latest` and `ubuntu-latest`, so a real macOS runner has to agree.
+
+The color contract is identical across OSes by construction (`color.js` is pure) and measured: `github.com/kitfunso/aura` on `master` gives frame `#262fd9` on Windows and on Linux. Regenerate with `node -e 'console.log(require("./src/color.js").colorsFor({repoId:"github.com/kitfunso/aura",branch:"master"}))'`.
 
 ## Known Risks (tracked, with fallbacks)
 - **CONFIRMED 2026-08-30 (spikes): Claude Code overwrites the terminal title continuously** - a nonce title set by a child process never survives long enough to find the window by it (polled 1000 ms, never seen). Title text is therefore best-effort, re-asserted per prompt; frame + tint carry identity. This also killed the nonce-title handshake: HWND discovery is `GetForegroundWindow()` at prompt time, gated by a terminal-process allowlist (WindowsTerminal, OpenConsole, conhost, wezterm-gui, alacritty, ghostty).

@@ -9,7 +9,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 
-const { restoreThisTerminal } = require("../src/install.js");
+const { restoreThisTerminal, bashProfile, isAuraCommand } = require("../src/install.js");
 const { restoreEscapes } = require("../src/mark.js");
 
 const CLI = path.join(__dirname, "..", "bin", "aura.js");
@@ -53,9 +53,7 @@ const PRE_AURA = JSON.stringify({
 function auraGroups(settings, eventName) {
   const groups = (settings.hooks && settings.hooks[eventName]) || [];
   return groups.filter(function (g) {
-    return (g.hooks || []).some(function (h) {
-      return String(h.command).indexOf("aura/src/hook.js") !== -1;
-    });
+    return (g.hooks || []).some(function (h) { return isAuraCommand(h.command); });
   });
 }
 
@@ -189,4 +187,65 @@ test("uninstall gives the terminal back exactly what the restore builds", () => 
   assert.doesNotThrow(function () {
     restoreThisTerminal(function () { throw new Error("no terminal here"); });
   }, "an uninstall with no terminal to write to still succeeds");
+});
+
+const FOREIGN_HOOK = 'node "/opt/aura-main/src/hook.js"';
+
+test("aura recognises its own hook whatever the folder is called", () => {
+  assert.ok(isAuraCommand(FOREIGN_HOOK), "a zip unpacked as aura-main is still aura");
+  assert.ok(isAuraCommand('node "/x/node_modules/@kitfunso/aura/src/hook.js"'), "the npm layout");
+  assert.ok(isAuraCommand("node /home/k/aura/src/hook.js"), "an unquoted command");
+  assert.ok(!isAuraCommand('node "/opt/othertool/src/hook.js"'), "another tool's hook is not ours");
+  assert.ok(!isAuraCommand("node other-tool.js"), "and neither is an unrelated command");
+});
+
+test("a hook installed from a differently named folder is not duplicated, and uninstalls", () => {
+  const pre = JSON.stringify({
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: FOREIGN_HOOK }] }],
+      UserPromptSubmit: [{ hooks: [{ type: "command", command: FOREIGN_HOOK }] }],
+    },
+  }, null, 2);
+  withSettings(pre, (file) => {
+    runInstaller(["--settings", file]);
+    const settings = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.strictEqual(settings.hooks.SessionStart.length, 1, "no second aura hook is added");
+    runUninstaller(["--settings", file]);
+    const after = JSON.parse(fs.readFileSync(file, "utf8"));
+    assert.strictEqual(auraGroups(after, "SessionStart").length, 0, "uninstall finds it");
+    assert.strictEqual(auraGroups(after, "UserPromptSubmit").length, 0);
+  });
+});
+
+function withFakePlatform(platform, fn) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aura-home-"));
+  const saved = [process.platform, process.env.HOME, process.env.USERPROFILE];
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  try {
+    fn(home);
+  } finally {
+    Object.defineProperty(process, "platform", { value: saved[0], configurable: true });
+    if (saved[1] === undefined) delete process.env.HOME; else process.env.HOME = saved[1];
+    if (saved[2] === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved[2];
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+}
+
+// A macOS terminal starts a LOGIN shell, and a login shell never reads .bashrc.
+test("on macOS bash installs into a login-shell profile, not .bashrc", () => {
+  withFakePlatform("darwin", (home) => {
+    assert.strictEqual(bashProfile(), path.join(home, ".bash_profile"), "none present: create .bash_profile");
+    fs.writeFileSync(path.join(home, ".profile"), "");
+    assert.strictEqual(bashProfile(), path.join(home, ".profile"), "an existing .profile is used");
+    fs.writeFileSync(path.join(home, ".bash_profile"), "");
+    assert.strictEqual(bashProfile(), path.join(home, ".bash_profile"), ".bash_profile wins");
+  });
+});
+
+test("on linux bash still installs into .bashrc", () => {
+  withFakePlatform("linux", (home) => {
+    assert.strictEqual(bashProfile(), path.join(home, ".bashrc"));
+  });
 });

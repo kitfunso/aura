@@ -54,7 +54,9 @@ function commandMark() {
 }
 
 function commandShellInit() {
-  const shell = argValue("--shell") || (process.platform === "win32" ? "powershell" : "bash");
+  // macOS has shipped zsh as the login shell since Catalina.
+  const shell = argValue("--shell") || (process.platform === "win32" ? "powershell"
+    : process.platform === "darwin" ? "zsh" : "bash");
   const snippet = shellSnippet(shell, __filename);
   if (!snippet) {
     console.error("aura: unknown shell " + shell + ". Known: " + SHELLS.join(", "));

@@ -2,7 +2,7 @@
 
 [![npm](https://img.shields.io/npm/v/%40kitfunso%2Faura)](https://www.npmjs.com/package/@kitfunso/aura)
 [![license: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-![platform: Windows 11](https://img.shields.io/badge/platform-Windows%2011-blue)
+![platform: Windows, macOS, Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 ![runtime dependencies: 0](https://img.shields.io/badge/runtime%20deps-0-brightgreen)
 
 Color identity for terminal windows. Repo = hue, branch = shade. Any shell
@@ -85,14 +85,21 @@ A tag lives and dies with its session, so nothing outlives the window that set i
 ## Install
 
 ```
-npx @kitfunso/aura install --shell powershell
+npx @kitfunso/aura install --shell powershell   # Windows
+npx @kitfunso/aura install --shell zsh          # macOS
+npx @kitfunso/aura install --shell bash         # Linux
 ```
 
-That wraps your PowerShell prompt, so every window in a repo gets the color
-whatever is running inside it. `--shell bash` and `--shell zsh` write the same
-thing into `~/.bashrc` / `~/.zshrc`. The snippet wraps your existing prompt
-instead of replacing it, so posh-git, oh-my-posh and Starship keep working, and
-it lands between two markers so a re-run replaces it instead of stacking.
+That wraps your shell prompt, so every window in a repo gets the color whatever
+is running inside it. The snippet wraps your existing prompt instead of
+replacing it, so posh-git, oh-my-posh, Starship and a zsh theme keep working,
+and it lands between two markers so a re-run replaces it instead of stacking.
+
+It picks the profile your shell actually reads: `$PROFILE` for PowerShell,
+`~/.zshrc` for zsh, `~/.bashrc` for bash on Linux, and `~/.bash_profile` on
+macOS. That last one is not a typo. A macOS terminal starts bash as a login
+shell, and a login shell reads `.bash_profile` and never `.bashrc`. Pass
+`--profile <path>` to override any of it.
 
 Claude Code also has a native hook, which colors a session the moment it starts
 rather than at its next prompt:
@@ -164,11 +171,26 @@ npm test
 
 ## Cross-platform
 
-The core is OS-neutral; only the tty device path and the frame adapter vary.
-macOS/Linux get tint + title (and iTerm2 tab color) from the same code today;
-frame adapters for them are planned (macOS needs an overlay window, there is
-no API to recolor another app's frame). See the support matrix in
-`docs/ARCHITECTURE.md`.
+The core is OS-neutral. Only the tty device path and the frame adapter vary,
+and there is no `darwin` branch anywhere in `src/`: macOS and Linux run the
+same code.
+
+| | Windows Terminal | iTerm2 | Terminal.app, gnome-terminal, kitty |
+|---|---|---|---|
+| Background tint | yes | yes | yes |
+| Window title | yes | yes | yes |
+| Tab color | yes (DECAC) | yes (OSC 6) | no such escape |
+| Window frame | yes (DWM) | planned | planned |
+
+A missing frame adapter degrades to tint and title, it never errors. Frame
+paint on macOS needs an overlay window, because no API recolors another app's
+frame; that is what [aura-overlay](https://github.com/kitfunso/aura-overlay)
+is for.
+
+The color contract is the same on every OS. `github.com/kitfunso/aura` on
+`master` computes to frame `#262fd9` on Windows and on Linux alike, so a repo
+you open on both machines wears one color. CI runs the suite on
+`windows-latest`, `macos-latest` and `ubuntu-latest`, so that stays true.
 
 ## Lane B (built)
 

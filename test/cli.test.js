@@ -11,7 +11,7 @@ const { execFileSync } = require("child_process");
 const CLI = path.join(__dirname, "..", "bin", "aura.js");
 const ESC = "\u001b";
 
-function runMark(cwd, extraArgs) {
+function runMark(cwd, extraArgs, extraEnv) {
   const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-state-"));
   const env = Object.assign({}, process.env, {
     LOCALAPPDATA: stateHome,
@@ -20,6 +20,7 @@ function runMark(cwd, extraArgs) {
   // No terminal marker: the adapter must not spawn inside the test suite.
   delete env.WT_SESSION;
   delete env.TERM_PROGRAM;
+  Object.assign(env, extraEnv || {});
   try {
     const args = [CLI, "mark", "--cwd", cwd, "--session", "test-session"];
     return execFileSync(process.execPath, args.concat(extraArgs || []), { env }).toString();
@@ -165,4 +166,53 @@ test("an unknown command exits non-zero and prints nothing on stdout", () => {
   }
   assert.strictEqual(code, 1);
   assert.strictEqual(stdout, "");
+});
+
+// The macOS path end to end, not just the escape builder. On Windows the same
+// TERM_PROGRAM would let the adapter paint the developer's own window.
+const NO_ITERM_ON_WINDOWS = process.platform === "win32"
+  ? "iTerm2 is a macOS terminal, and the adapter would paint this window"
+  : false;
+
+const BEL = String.fromCharCode(7);
+
+test("iTerm2 gets a tint, three tab-color escapes and a title", { skip: NO_ITERM_ON_WINDOWS }, () => {
+  const dir = makeRepo("main");
+  try {
+    const out = runMark(dir, [], { TERM_PROGRAM: "iTerm.app" });
+    assert.ok(out.startsWith(ESC + "]11;#"), "the tint leads");
+    ["red", "green", "blue"].forEach(function (channel) {
+      const set = ESC + "]6;1;bg;" + channel + ";brightness;";
+      assert.ok(out.includes(set), channel + " brightness is set");
+      const value = out.slice(out.indexOf(set) + set.length).split(BEL)[0];
+      assert.strictEqual(String(Number(value)), value, channel + " carries a channel number");
+      assert.ok(Number(value) >= 0 && Number(value) <= 255, channel + " is in range");
+    });
+    assert.ok(out.endsWith(ESC + "]0;" + path.basename(dir) + " · main" + BEL), "title last");
+    assert.strictEqual(out.indexOf(ESC + "]4;"), -1, "no Windows Terminal palette write");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("leaving the repo gives iTerm2 back its own tab color", { skip: NO_ITERM_ON_WINDOWS }, () => {
+  const stateHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-state-"));
+  const dir = makeRepo("main");
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), "aura-plain-"));
+  const env = Object.assign({}, process.env, {
+    LOCALAPPDATA: stateHome, XDG_STATE_HOME: stateHome, TERM_PROGRAM: "iTerm.app",
+  });
+  delete env.WT_SESSION;
+  const run = function (cwd) {
+    return execFileSync(process.execPath,
+      [CLI, "mark", "--cwd", cwd, "--session", "iterm-restore"], { env }).toString();
+  };
+  try {
+    run(dir);
+    const back = run(plain);
+    assert.ok(back.startsWith(ESC + "]111" + BEL + ESC + "]6;1;bg;*;default" + BEL),
+      "the background and the tab color both come back");
+  } finally {
+    [stateHome, dir, plain].forEach(function (d) { fs.rmSync(d, { recursive: true, force: true }); });
+  }
 });

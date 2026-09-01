@@ -37,9 +37,19 @@ function writeAtomic(file, contents) {
   fs.renameSync(tmp, file);
 }
 
+// Identity is the script the command runs, never the folder a user happened to
+// name: a GitHub zip unpacks to aura-main, and that is still aura.
+function isAuraCommand(command) {
+  if (typeof command !== "string") return false;
+  const quoted = command.match(/"([^"]+)"/);
+  const script = (quoted ? quoted[1] : command.replace(/^\s*\S+\s+/, "")).replace(/\\/g, "/").trim();
+  if (!/\/src\/hook\.js$/.test(script)) return false;
+  return script === hookScript || /(^|\/)aura[^/]*\/src\/hook\.js$/i.test(script);
+}
+
 function isAuraGroup(group) {
   return Array.isArray(group.hooks) && group.hooks.some(function (h) {
-    return typeof h.command === "string" && h.command.indexOf("aura/src/hook.js") !== -1;
+    return isAuraCommand(h.command);
   });
 }
 
@@ -90,12 +100,23 @@ function powershellProfile() {
   return out;
 }
 
+// macOS terminals start bash as a LOGIN shell, and a login shell reads
+// .bash_profile and never .bashrc (GNU bash manual, "Bash Startup Files").
+function bashProfile() {
+  const home = os.homedir();
+  if (process.platform !== "darwin") return path.join(home, ".bashrc");
+  const found = [".bash_profile", ".bash_login", ".profile"]
+    .map(function (name) { return path.join(home, name); })
+    .filter(function (file) { return fs.existsSync(file); });
+  return found[0] || path.join(home, ".bash_profile");
+}
+
 function profileFor(shell) {
   const explicit = argValue("--profile");
   if (explicit) return explicit;
   if (shell === "powershell") return powershellProfile();
   if (shell === "zsh") return path.join(os.homedir(), ".zshrc");
-  return path.join(os.homedir(), ".bashrc");
+  return bashProfile();
 }
 
 function withoutAuraBlock(text) {
@@ -165,4 +186,4 @@ function run(uninstall) {
   installHooks(uninstall);
 }
 
-module.exports = { run, restoreThisTerminal };
+module.exports = { run, restoreThisTerminal, bashProfile, isAuraCommand };
